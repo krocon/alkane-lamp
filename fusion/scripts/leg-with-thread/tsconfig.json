@@ -1,0 +1,20 @@
+{
+  "compilerOptions":	{
+    "target":	"ES2020",
+    "module":	"ESNext",
+    "moduleResolution":	"bundler",
+    "strict":	true,
+    "esModuleInterop":	true,
+    "skipLibCheck":	true,
+    "forceConsistentCasingInFileNames":	true,
+    "outDir":	"./out",
+    "rootDir":	".",
+    "paths":	{
+      "@adsk/*":	["../../fusion/lib/API/TypeScript/@adsk/*"],
+      "fs":	["../../fusion/lib/API/TypeScript/fs/index.d.ts"],
+      "fs/promises":	["../../fusion/lib/API/TypeScript/fs/promises.d.ts"]
+    }
+  },
+  "include":	["**/*.ts"],
+  "exclude":	["node_modules", "out"]
+}
