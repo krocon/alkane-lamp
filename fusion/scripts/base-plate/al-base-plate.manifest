@@ -3,7 +3,7 @@
 	"type":	"script",
 	"author":	"Marc Kronberg",
 	"description":	{
-		"":	"Node (knot, center of a tetrapod) for Alkane Lamp"
+		"":	"Base Plate for Alkane Lamp"
 	},
 	"version":	"1.0.0",
 	"supportedOS":	"windows|mac",

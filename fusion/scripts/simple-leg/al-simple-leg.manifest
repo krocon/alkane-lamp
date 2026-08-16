@@ -3,7 +3,7 @@
 	"type":	"script",
 	"author":	"Marc Kronberg",
 	"description":	{
-		"":	"Simple leg"
+		"":	"Simple leg for Alkane Lamp"
 	},
 	"version":	"1.0.0",
 	"supportedOS":	"windows|mac",

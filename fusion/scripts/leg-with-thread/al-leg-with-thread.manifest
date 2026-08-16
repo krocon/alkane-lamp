@@ -3,7 +3,7 @@
 	"type":	"script",
 	"author":	"Marc Kronberg",
 	"description":	{
-		"":	"leg-with-thread"
+		"":	"Leg with inner thread for Alkane Lamp"
 	},
 	"version":	"1.0.0",
 	"supportedOS":	"windows|mac",
