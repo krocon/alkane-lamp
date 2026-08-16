@@ -10,9 +10,9 @@
     "outDir":	"./out",
     "rootDir":	".",
     "paths":	{
-      "@adsk/*":	["../../fusion/lib/API/TypeScript/@adsk/*"],
-      "fs":	["../../fusion/lib/API/TypeScript/fs/index.d.ts"],
-      "fs/promises":	["../../fusion/lib/API/TypeScript/fs/promises.d.ts"]
+      "@adsk/*":	["../../lib/API/TypeScript/@adsk/*"],
+      "fs":	["../../lib/API/TypeScript/fs/index.d.ts"],
+      "fs/promises":	["../../lib/API/TypeScript/fs/promises.d.ts"]
     }
   },
   "include":	["**/*.ts"],
