@@ -66,7 +66,7 @@ function setupParameters(design: adsk.fusion.Design) {
     function getOrCreateParam(name: string, valueStr: string, unit: string, description: string): adsk.fusion.UserParameter {
         let p = params.itemByName(name);
         if (!p) {
-            p = params.add(name, adsk.core.ValueInput.createByString(valueStr), unit, description);
+            p = params.add(name, adsk.core.ValueInput.createByString(valueStr)!, unit, description)!;
         }
         return p;
     }
@@ -95,10 +95,10 @@ function createLongArm(
     const features = rootComp.features;
     const extrudeFeatures = features.extrudeFeatures;
     const xyPlane = rootComp.xYConstructionPlane;
-    const center = adsk.core.Point3D.create(0, 0, 0);
+    const center = adsk.core.Point3D.create(0, 0, 0)!;
 
     // Skizze auf der XY-Ebene erstellen
-    const sketch = sketches.add(xyPlane);
+    const sketch = sketches.add(xyPlane)!;
     sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.armOuterDiameter.value / 2.0);
     sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.ringInnerDiameter.value / 2.0);
 
@@ -107,7 +107,7 @@ function createLongArm(
 
     // Profile identifizieren: Wir unterscheiden zwischen dem inneren Kreis und dem äußeren Ring
     for (let i = 0; i < sketch.profiles.count; i++) {
-        const prof = sketch.profiles.item(i);
+        const prof = sketch.profiles.item(i)!;
         if (prof.profileLoops.count === 1) {
             innerProfile = prof; // Der volle Kreis (innen)
         } else {
@@ -117,8 +117,8 @@ function createLongArm(
 
     // Fallback-Logik zur Profilfindung falls die Loop-Zählung nicht eindeutig ist
     if (!innerProfile || !outerRingProfile) {
-        const prof0 = sketch.profiles.item(0);
-        const prof1 = sketch.profiles.item(1);
+        const prof0 = sketch.profiles.item(0)!;
+        const prof1 = sketch.profiles.item(1)!;
         if (prof0.areaProperties().area < prof1.areaProperties().area) {
             innerProfile = prof0;
             outerRingProfile = prof1;
@@ -129,10 +129,10 @@ function createLongArm(
     }
 
     // Extrusion des äußeren Rings
-    const extInputRing = extrudeFeatures.createInput(outerRingProfile, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+    const extInputRing = extrudeFeatures.createInput(outerRingProfile!, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)!;
     const distanceExtent = '-arm_depth_long'; // Negative Richtung entlang der normalen Achse (Z)
-    extInputRing.setDistanceExtent(false, adsk.core.ValueInput.createByString(distanceExtent));
-    return extrudeFeatures.add(extInputRing).bodies.item(0);
+    extInputRing.setDistanceExtent(false, adsk.core.ValueInput.createByString(distanceExtent)!);
+    return extrudeFeatures.add(extInputRing)!.bodies.item(0)!;
 }
 
 
@@ -157,7 +157,7 @@ function addLongArmThread(
     const targetRadius = params.ringInnerDiameter.value / 2.0;
 
     for (let i = 0; i < armBody.faces.count; i++) {
-        const face = armBody.faces.item(i);
+        const face = armBody.faces.item(i)!;
         if (face.geometry.surfaceType === adsk.core.SurfaceTypes.CylinderSurfaceType) {
             const cyl = face.geometry as adsk.core.Cylinder;
 
@@ -186,7 +186,7 @@ function addLongArmThread(
     const designator = "M40x2.5";
     const threadClass = "6H";
 
-    const threadInfo = threadFeatures.createThreadInfo(true, threadType, designator, threadClass);
+    const threadInfo = threadFeatures.createThreadInfo(true, threadType, designator, threadClass)!;
 
     // 3. Thread-Feature erstellen
     const threadInput = threadFeatures.createInput(targetFace, threadInfo);
@@ -200,8 +200,8 @@ function addLongArmThread(
     let offsetCm = faceHeight - threadLengthCm;
     if (offsetCm < 0) offsetCm = 0;
 
-    threadInput.offset = adsk.core.ValueInput.createByReal(offsetCm);
-    threadInput.threadLength = adsk.core.ValueInput.createByReal(threadLengthCm);
+    threadInput.threadOffset = adsk.core.ValueInput.createByReal(offsetCm)!;
+    threadInput.threadLength = adsk.core.ValueInput.createByReal(threadLengthCm)!;
 
     const threadFeature = threadFeatures.add(threadInput);
     if (!threadFeature) {
@@ -210,19 +210,20 @@ function addLongArmThread(
     }
 
     // 4. Gewinde weiten (Toleranzberücksichtigung durch Drücken/Ziehen)
-    const facesToOffset = adsk.core.ObjectCollection.create();
+    const facesToOffset: adsk.fusion.BRepFace[] = [];
     for (let i = 0; i < threadFeature.faces.count; i++) {
-        facesToOffset.add(threadFeature.faces.item(i));
+        facesToOffset.push(threadFeature.faces.item(i)!);
     }
 
-    if (facesToOffset.count > 0) {
+    if (facesToOffset.length > 0) {
         const offsetFeatures = features.offsetFacesFeatures;
         const offsetInput = offsetFeatures.createInput(
           facesToOffset,
-          adsk.core.ValueInput.createByString("-0.1mm"),
-          true // isChainFaces
+          adsk.core.ValueInput.createByString("-0.1mm")!
         );
-        offsetFeatures.add(offsetInput);
+        if (offsetInput) {
+            offsetFeatures.add(offsetInput);
+        }
     }
 }
 
@@ -238,30 +239,30 @@ function boreOutLongArm(
   params: ReturnType<typeof setupParameters>
 ): void {
     const constructionPlanes = rootComp.constructionPlanes;
-    const planeInput = constructionPlanes.createInput();
+    const planeInput = constructionPlanes.createInput()!;
 
     // Ebene orthogonal zur Z-Achse bei -60mm (6.0 cm)
-    const offsetValue = adsk.core.ValueInput.createByReal(-6.0);
+    const offsetValue = adsk.core.ValueInput.createByReal(-6.0)!;
     planeInput.setByOffset(rootComp.xYConstructionPlane, offsetValue);
-    const offsetPlane = constructionPlanes.add(planeInput);
+    const offsetPlane = constructionPlanes.add(planeInput)!;
 
     const sketches = rootComp.sketches;
-    const sketch = sketches.add(offsetPlane);
+    const sketch = sketches.add(offsetPlane)!;
 
     // Kreis mit 41mm Durchmesser (Radius 20.05 cm)
     const diameterCm = 4.1;
     sketch.sketchCurves.sketchCircles.addByCenterRadius(
-      adsk.core.Point3D.create(0, 0, 0),
+      adsk.core.Point3D.create(0, 0, 0)!,
       diameterCm / 2.0
     );
 
     if (sketch.profiles.count === 0) return;
-    const profile = sketch.profiles.item(0);
+    const profile = sketch.profiles.item(0)!;
 
     // Extrusion (Cut) 60mm nach innen (Richtung Ursprung)
     const extrudeFeatures = rootComp.features.extrudeFeatures;
-    const extInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
-    extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(2.75));
+    const extInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation)!;
+    extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(2.75)!);
 
     extrudeFeatures.add(extInput);
 }
@@ -274,22 +275,22 @@ function boreOutLongArm(
  */
 function boreOutFromOrigin(rootComp: adsk.fusion.Component): void {
     const sketches = rootComp.sketches;
-    const sketch = sketches.add(rootComp.xYConstructionPlane);
+    const sketch = sketches.add(rootComp.xYConstructionPlane)!;
 
     // Kreis mit 40.05mm Durchmesser (Radius: 2.0025 cm)
     const diameterCm = 4.005;
     sketch.sketchCurves.sketchCircles.addByCenterRadius(
-        adsk.core.Point3D.create(0, 0, 0),
+        adsk.core.Point3D.create(0, 0, 0)!,
         diameterCm / 2.0
     );
 
     if (sketch.profiles.count === 0) return;
-    const profile = sketch.profiles.item(0);
+    const profile = sketch.profiles.item(0)!;
 
     // Extrusion (Cut) 32.50mm entlang der Z-Achse in das Rohr (-Z Richtung)
     const extrudeFeatures = rootComp.features.extrudeFeatures;
-    const extInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
-    extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(-3.25));
+    const extInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation)!;
+    extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(-3.25)!);
 
     extrudeFeatures.add(extInput);
 }
