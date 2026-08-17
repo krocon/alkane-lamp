@@ -781,6 +781,8 @@ function filletLegPlateJunction(
 
 /**
  * Wendet einen konstanten Radius-Fillet auf die übergebenen Kanten an.
+ * @param rootComp
+ * @param edges
  * @param radiusExpr Expression für den Radius (Parameter-Referenz, z. B. "leg_plate_rounding"),
  *                   damit die Längeneinheit über den Parameter übernommen wird.
  * @returns true, wenn das Fillet erfolgreich erstellt wurde.
