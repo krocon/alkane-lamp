@@ -101,7 +101,7 @@ function setupParameters(design: adsk.fusion.Design) {
         ringInnerDiameter: getOrCreateParam('ring_inner_diameter', '40mm', 'mm', 'Aussendurchmesser des oberen Röhrensegments (Stufenabsatz)'),
         ringExtrudeDepth: getOrCreateParam('ring_extrude_depth', '50mm', 'mm', 'Länge des oberen (dünnen) Röhrensegments / Stufenabsatz'),
         holeInnerDiameter: getOrCreateParam('hole_inner_diameter', '31.5mm', 'mm', 'Innendurchmesser der Röhre (Loch)'),
-        legLength: getOrCreateParam('leg_length', '80mm', 'mm', 'Laenge der Röhre'),
+        legLength: getOrCreateParam('leg_length', '100mm', 'mm', 'Laenge der Röhre'),
         legAngle: getOrCreateParam('leg_angle', '120', 'degree', 'Winkel des Beines zur XY-Ebene (Innenwinkel an der Platte)'),
         legOffset: getOrCreateParam('leg_offset', '45mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
         legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante: Bein und Platte (wird bei Solver-Problemen automatisch verkleinert)')
