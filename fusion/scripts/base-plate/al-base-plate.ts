@@ -1,7 +1,7 @@
 /** This file acts as the main module for this script. */
 
 
-import {adsk} from "@adsk/fusion";
+import { adsk } from "@adsk/fusion";
 
 const app = adsk.core.Application.get();
 const ui = app ? app.userInterface : null;
@@ -118,7 +118,7 @@ interface LegAxis {
     /** Endpunkt der Achse (Mittelpunkt der oberen Stirnfläche). */
     end: adsk.core.Point3D;
     /** Normalisierte Richtung der Achse (von der Platte zum Kopf). */
-    dir: {x: number, y: number, z: number};
+    dir: { x: number, y: number, z: number };
     /** Skizzierte Achslinie (Konstruktionsgeometrie) in der XZ-Ebene. */
     line: adsk.fusion.SketchLine;
 }
@@ -186,9 +186,9 @@ function createBasePlate(rootComp: adsk.fusion.Component, params: Params): adsk.
     const edgeColl = adsk.core.ObjectCollection.create();
     edgeColl.add(topEdge);
     filletInput.edgeSetInputs.addConstantRadiusEdgeSet(
-      edgeColl,
-      adsk.core.ValueInput.createByString('base_plate_rounding')!,
-      false
+        edgeColl,
+        adsk.core.ValueInput.createByString('base_plate_rounding')!,
+        false
     );
     const filletFeature = rootComp.features.filletFeatures.add(filletInput);
     if (!filletFeature) {
@@ -233,7 +233,7 @@ function findCircularEdgeAtZ(body: adsk.fusion.BRepBody, z: number, radius: numb
 function createLegAxis(rootComp: adsk.fusion.Component, params: Params): LegAxis {
     // In der Fusion 360 API ist Parameter.value für Winkel bereits in Radiant (interne Database Units)
     const angleRad = params.legAngle.value;
-    const dir = {x: Math.cos(angleRad), y: 0, z: Math.sin(angleRad)};
+    const dir = { x: Math.cos(angleRad), y: 0, z: Math.sin(angleRad) };
     const legLen = params.legLength.value;
 
     const start = adsk.core.Point3D.create(0, 0, 0);
@@ -247,28 +247,37 @@ function createLegAxis(rootComp: adsk.fusion.Component, params: Params): LegAxis
     if (!sketch) {
         throw new Error('Referenzskizze konnte nicht auf der XZ-Ebene erstellt werden.');
     }
-    const line = sketch.sketchCurves.sketchLines.addByTwoPoints(start, end);
+
+    // WICHTIG: 3D-Punkte (start/end) müssen mit modelToSketchSpace in den 2D-Skizzenraum
+    // der XZ-Ebene transformiert werden, damit Z nicht als Y=0 verschluckt wird!
+    const startSketch = sketch.modelToSketchSpace(start);
+    const endSketch = sketch.modelToSketchSpace(end);
+    if (!startSketch || !endSketch) {
+        throw new Error('Skizzenpunkte der Bein-Achse konnten nicht transformiert werden.');
+    }
+
+    const line = sketch.sketchCurves.sketchLines.addByTwoPoints(startSketch, endSketch);
     if (!line) {
         throw new Error('Bein-Achse (Gerade) konnte nicht skizziert werden.');
     }
     line.isConstruction = true; // Referenz-/Konstruktionsgeometrie
 
-    return {start, end, dir, line};
+    return { start, end, dir, line };
 }
 
 /**
  * 2b) Konstruktionsebene, die rechtwinklig auf der Bein-Achse am oberen
  *     Endpunkt liegt ("Plane Along Path").
- *     Primär: setByDistanceOnPath(Achslinie, 1).
+ *     Primär: setByDistanceOnPath(Achslinie, 1.0) am Kopfpunkt.
  *     Fallback: Ebene durch drei Punkte auf der Zielachse (setByThreePoints).
  */
 function createTiltedConstructionPlane(
-  rootComp: adsk.fusion.Component,
-  legAxis: LegAxis
+    rootComp: adsk.fusion.Component,
+    legAxis: LegAxis
 ): adsk.fusion.ConstructionPlane {
     const planes = rootComp.constructionPlanes;
 
-    // Primär: Ebene entlang der Pfadlinie am Endpunkt (distance = 1.0)
+    // Primär: Ebene entlang der Pfadlinie am Bein-Kopf (Endpunkt, distance = 1.0)
     let input = planes.createInput();
     if (input) {
         if (input.setByDistanceOnPath(legAxis.line, adsk.core.ValueInput.createByReal(1.0)!)) {
@@ -277,7 +286,6 @@ function createTiltedConstructionPlane(
                 return plane;
             }
         }
-        // Input-Objekt ist wegwerfbar; Referenz wird verworfen (GC)
     }
 
     // Fallback: Ebene durch drei Punkte am Endpunkt der Achse
@@ -314,116 +322,192 @@ function createTiltedConstructionPlane(
  * @returns Der kombinierte Körper (Platte + Bein) und die Bein-Skizze (für den Stufenabsatz).
  */
 function createLegTube(
-  rootComp: adsk.fusion.Component,
-  params: Params,
-  tiltedPlane: adsk.fusion.ConstructionPlane,
-  legAxis: LegAxis,
-  baseBody: adsk.fusion.BRepBody
+    rootComp: adsk.fusion.Component,
+    params: Params,
+    tiltedPlane: adsk.fusion.ConstructionPlane,
+    legAxis: LegAxis,
+    baseBody: adsk.fusion.BRepBody
 ): LegTubeResult {
     const outerRadius = params.legOuterDiameter.value / 2.0;
     const innerRadius = params.ringInnerDiameter.value / 2.0;
 
-    // Skizze auf der geneigten Konstruktionsebene; Kreise um den Achsen-Endpunkt
+    // Skizze auf der geneigten Konstruktionsebene
     const sketch = rootComp.sketches.add(tiltedPlane);
     if (!sketch) {
         throw new Error('Skizze auf der geneigten Konstruktionsebene konnte nicht erstellt werden.');
     }
-    const centerPoint = sketch.modelToSketchSpace(legAxis.end);
+    // Da tiltedPlane bereits am Achsen-Endpunkt zentriert ist, liegt der Mittelpunkt
+    // in 2D-Skizzenkoordinaten exakt im Ursprung (0,0,0) der Skizze!
+    const centerPoint = adsk.core.Point3D.create(0, 0, 0);
+    if (!centerPoint) {
+        throw new Error('Mittelpunkt (0,0,0) konnte nicht erstellt werden.');
+    }
+    // Zuerst nur den äußeren Kreis zeichnen, damit das Profil für den Außenzylinder eindeutig ist
     sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, outerRadius);
-    sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, innerRadius);
 
-    if (sketch.profiles.count < 2) {
-        throw new Error('Erwartete Profile (Außenkreis + Innenkreis) in der Bein-Skizze nicht gefunden.');
+    if (sketch.profiles.count < 1) {
+        throw new Error('Erwartetes Profil in der Bein-Skizze nicht gefunden.');
     }
 
     const legBody = extrudeAlongAxisDown(rootComp, sketch, params);
 
+    // Anschließend den inneren Kreis für den Stufenabsatz (cutStepShoulder) hinzufügen
+    sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, innerRadius);
+
     // Geometrie mit der Basis-Platte kombinieren (Join)
     const combined = joinBodies(rootComp, baseBody, [legBody]);
 
-    return {body: combined, sketch};
+    return { body: combined, sketch };
 }
 
 /**
- * Extrudiert alle Profile der Skizze (den vollen Außenzylinder legOuterDiameter) um eine Distanz,
+ * Extrudiert das Profil der Skizze (den vollen Außenzylinder legOuterDiameter) um eine Distanz,
  * die garantiert die Basis-Platte durchdringt. Die Richtung wird dynamisch ermittelt.
- * Diese Methode ist robuster als "ToEntity", das in diesem Kontext fehlschlägt.
  */
 function extrudeAlongAxisDown(
-  rootComp: adsk.fusion.Component,
-  sketch: adsk.fusion.Sketch,
-  params: Params
+    rootComp: adsk.fusion.Component,
+    sketch: adsk.fusion.Sketch,
+    params: Params
 ): adsk.fusion.BRepBody {
     const extrudeFeatures = rootComp.features.extrudeFeatures;
     const targetZ = params.basePlateHeight.value;
 
-    // Alle Profile der Skizze erfassen, um den vollen Außenzylinder (legOuterDiameter) zu extrudieren
-    const profileColl = adsk.core.ObjectCollection.create();
-    if (!profileColl) {
-        throw new Error('ObjectCollection konnte nicht erstellt werden.');
-    }
-    for (let i = 0; i < sketch.profiles.count; i++) {
-        const prof = sketch.profiles.item(i);
-        if (prof) {
-            profileColl.add(prof);
+    let profileArg: adsk.core.Base;
+    if (sketch.profiles.count === 1) {
+        profileArg = sketch.profiles.item(0)!;
+    } else {
+        const profileColl = adsk.core.ObjectCollection.create();
+        if (!profileColl) {
+            throw new Error('ObjectCollection konnte nicht erstellt werden.');
         }
-    }
-    if (profileColl.count === 0) {
-        throw new Error('Kein Profil für die Bein-Extrusion gefunden.');
-    }
-
-    // Die Richtung (negativ/positiv) wird ausprobiert.
-    // Negative Distanz extrudiert entlang der Normalen in Richtung der Basis-Platte.
-    for (const sign of [-1.0, 1.0]) {
-        const extInput = extrudeFeatures.createInput(profileColl, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
-        if (!extInput) {
-            throw new Error('Extrusions-Input für das Bein konnte nicht erstellt werden.');
+        for (let i = 0; i < sketch.profiles.count; i++) {
+            const prof = sketch.profiles.item(i);
+            if (prof) {
+                profileColl.add(prof);
+            }
         }
+        profileArg = profileColl;
+    }
 
-        // Distanz, die garantiert die Platte durchdringt.
-        const distStr = sign > 0
-          ? '(leg_length + base_plate_height)'
-          : '-1 * (leg_length + base_plate_height)';
-        let dist = adsk.core.ValueInput.createByString(distStr);
-        if (!dist) {
-            dist = adsk.core.ValueInput.createByReal(sign * (params.legLength.value + params.basePlateHeight.value));
-        }
-        if (!dist) continue;
+    const errors: string[] = [];
+    const totalDistReal = params.legLength.value + params.basePlateHeight.value;
 
-        extInput.setDistanceExtent(false, dist);
-
-        let extFeature: adsk.fusion.ExtrudeFeature | null = null;
-        try {
-            extFeature = extrudeFeatures.add(extInput);
-        } catch (err) {
-            try {
-                const realDist = adsk.core.ValueInput.createByReal(sign * (params.legLength.value + params.basePlateHeight.value));
-                if (realDist) {
-                    const fallbackInput = extrudeFeatures.createInput(profileColl, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
-                    if (fallbackInput) {
-                        fallbackInput.setDistanceExtent(false, realDist);
-                        extFeature = extrudeFeatures.add(fallbackInput);
+    const strategies: Array<{ name: string, run: () => adsk.fusion.ExtrudeFeature | null }> = [
+        // Strategie 1: Positiv-String 'leg_length + base_plate_height' (entlang Normalenvektor nach unten)
+        {
+            name: "Positiv-String ('leg_length + base_plate_height')",
+            run: () => {
+                const input = extrudeFeatures.createInput(profileArg, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+                const dist = adsk.core.ValueInput.createByString('leg_length + base_plate_height');
+                if (input && dist) {
+                    input.setDistanceExtent(false, dist);
+                    return extrudeFeatures.add(input);
+                }
+                return null;
+            }
+        },
+        // Strategie 2: setOneSideExtent mit PositiveExtentDirection und positivem String
+        {
+            name: "setOneSideExtent (PositiveExtentDirection)",
+            run: () => {
+                const input = extrudeFeatures.createInput(profileArg, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+                const distVal = adsk.core.ValueInput.createByString('leg_length + base_plate_height');
+                if (input && distVal) {
+                    const distDef = adsk.fusion.DistanceExtentDefinition.create(distVal);
+                    if (distDef) {
+                        input.setOneSideExtent(distDef, adsk.fusion.ExtentDirections.PositiveExtentDirection);
+                        return extrudeFeatures.add(input);
                     }
                 }
-            } catch (err2) {
-                console.log(`Extrusion-Versuch (Distanz ${distStr}) fehlgeschlagen: ${err2}`);
-                continue;
+                return null;
             }
+        },
+        // Strategie 3: Reale Distanz positiv (+totalDistReal)
+        {
+            name: "Reale Distanz positiv (+9.0 cm)",
+            run: () => {
+                const input = extrudeFeatures.createInput(profileArg, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+                const dist = adsk.core.ValueInput.createByReal(totalDistReal);
+                if (input && dist) {
+                    input.setDistanceExtent(false, dist);
+                    return extrudeFeatures.add(input);
+                }
+                return null;
+            }
+        },
+        // Strategie 4: setOneSideExtent mit NegativeExtentDirection und positivem String
+        {
+            name: "setOneSideExtent (NegativeExtentDirection)",
+            run: () => {
+                const input = extrudeFeatures.createInput(profileArg, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+                const distVal = adsk.core.ValueInput.createByString('leg_length + base_plate_height');
+                if (input && distVal) {
+                    const distDef = adsk.fusion.DistanceExtentDefinition.create(distVal);
+                    if (distDef) {
+                        input.setOneSideExtent(distDef, adsk.fusion.ExtentDirections.NegativeExtentDirection);
+                        return extrudeFeatures.add(input);
+                    }
+                }
+                return null;
+            }
+        },
+        // Strategie 5: Negative String-Expression (-leg_length - base_plate_height)
+        {
+            name: "Negativ-String ('-leg_length - base_plate_height')",
+            run: () => {
+                const input = extrudeFeatures.createInput(profileArg, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+                const dist = adsk.core.ValueInput.createByString('-leg_length - base_plate_height');
+                if (input && dist) {
+                    input.setDistanceExtent(false, dist);
+                    return extrudeFeatures.add(input);
+                }
+                return null;
+            }
+        },
+        // Strategie 6: Reale Distanz negativ (-totalDistReal)
+        {
+            name: "Reale Distanz negativ (-9.0 cm)",
+            run: () => {
+                const input = extrudeFeatures.createInput(profileArg, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+                const dist = adsk.core.ValueInput.createByReal(-1.0 * totalDistReal);
+                if (input && dist) {
+                    input.setDistanceExtent(false, dist);
+                    return extrudeFeatures.add(input);
+                }
+                return null;
+            }
+        }
+    ];
+
+    for (let idx = 0; idx < strategies.length; idx++) {
+        const strat = strategies[idx];
+        let extFeature: adsk.fusion.ExtrudeFeature | null = null;
+        try {
+            extFeature = strat.run();
+        } catch (err) {
+            errors.push(`${strat.name}: ${err instanceof Error ? err.message : String(err)}`);
+            continue;
         }
 
         if (extFeature && extFeature.bodies.count > 0) {
             const body = extFeature.bodies.item(0);
-            // Erfolgskontrolle: Der tiefste Punkt muss die Plattenoberfläche erreichen.
-            if (body && body.boundingBox.minPoint.z < targetZ + TOL) {
-                return body;
+            if (body) {
+                const minZ = body.boundingBox.minPoint.z;
+                if (minZ < targetZ + TOL) {
+                    return body;
+                }
+                errors.push(`${strat.name}: minZ=${minZ.toFixed(2)} cm (erwartet < ${(targetZ + TOL).toFixed(2)} cm)`);
             }
             extFeature.deleteMe();
         } else if (extFeature) {
             extFeature.deleteMe();
+            errors.push(`${strat.name}: Feature ohne Körper erzeugt`);
+        } else {
+            errors.push(`${strat.name}: createInput/add lieferte null`);
         }
     }
 
-    throw new Error('Extrusion des Beins in Richtung der Basis-Platte ist fehlgeschlagen.');
+    throw new Error(`Extrusion des Beins in Richtung der Basis-Platte ist fehlgeschlagen.\nDetails:\n${errors.join('\n')}`);
 }
 
 /**
@@ -431,9 +515,9 @@ function extrudeAlongAxisDown(
  * @returns Der Zielkörper (jetzt kombiniert).
  */
 function joinBodies(
-  rootComp: adsk.fusion.Component,
-  target: adsk.fusion.BRepBody,
-  tools: adsk.fusion.BRepBody[]
+    rootComp: adsk.fusion.Component,
+    target: adsk.fusion.BRepBody,
+    tools: adsk.fusion.BRepBody[]
 ): adsk.fusion.BRepBody {
     const toolColl = adsk.core.ObjectCollection.create();
     for (const t of tools) {
@@ -457,78 +541,97 @@ function joinBodies(
  *     Werkzeug: das Ring-Profil zwischen den beiden skizzierten Kreisen (Cut).
  */
 function cutStepShoulder(
-  rootComp: adsk.fusion.Component,
-  params: Params,
-  sketch: adsk.fusion.Sketch,
-  body: adsk.fusion.BRepBody,
-  legAxis: LegAxis
+    rootComp: adsk.fusion.Component,
+    params: Params,
+    sketch: adsk.fusion.Sketch,
+    body: adsk.fusion.BRepBody,
+    legAxis: LegAxis
 ): void {
     const innerRadius = params.ringInnerDiameter.value / 2.0;
     const extrudeFeatures = rootComp.features.extrudeFeatures;
+    const errors: string[] = [];
 
-    // Richtung zur Platte (-Z) wird zuerst geprüft
-    for (const sign of [-1.0, 1.0]) {
-        // Ring-Profil in der Bein-Skizze bei jedem Durchlauf frisch suchen (2 Loops)
-        let ringProfile: adsk.fusion.Profile | null = null;
-        for (let i = 0; i < sketch.profiles.count; i++) {
-            const prof = sketch.profiles.item(i);
-            if (prof && prof.profileLoops.count === 2) {
-                ringProfile = prof;
-                break;
+    // Ring-Profil in der Bein-Skizze suchen (2 Loops)
+    let ringProfile: adsk.fusion.Profile | null = null;
+    for (let i = 0; i < sketch.profiles.count; i++) {
+        const prof = sketch.profiles.item(i);
+        if (prof && prof.profileLoops.count === 2) {
+            ringProfile = prof;
+            break;
+        }
+    }
+    if (!ringProfile) {
+        throw new Error('Ring-Profil (2 Loops) für den Stufenabsatz in der Bein-Skizze nicht gefunden.');
+    }
+
+    const depthReal = params.ringExtrudeDepth.value;
+
+    const strategies: Array<() => adsk.fusion.ExtrudeFeature | null> = [
+        () => {
+            const input = extrudeFeatures.createInput(ringProfile!, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const dist = adsk.core.ValueInput.createByString('-ring_extrude_depth');
+            if (input && dist) { input.setDistanceExtent(false, dist); return extrudeFeatures.add(input); }
+            return null;
+        },
+        () => {
+            const input = extrudeFeatures.createInput(ringProfile!, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const distVal = adsk.core.ValueInput.createByString('ring_extrude_depth');
+            if (input && distVal) {
+                const distDef = adsk.fusion.DistanceExtentDefinition.create(distVal);
+                if (distDef) { input.setOneSideExtent(distDef, adsk.fusion.ExtentDirections.NegativeExtentDirection); return extrudeFeatures.add(input); }
             }
+            return null;
+        },
+        () => {
+            const input = extrudeFeatures.createInput(ringProfile!, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const dist = adsk.core.ValueInput.createByReal(-1.0 * depthReal);
+            if (input && dist) { input.setDistanceExtent(false, dist); return extrudeFeatures.add(input); }
+            return null;
+        },
+        () => {
+            const input = extrudeFeatures.createInput(ringProfile!, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const dist = adsk.core.ValueInput.createByString('ring_extrude_depth');
+            if (input && dist) { input.setDistanceExtent(false, dist); return extrudeFeatures.add(input); }
+            return null;
+        },
+        () => {
+            const input = extrudeFeatures.createInput(ringProfile!, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const distVal = adsk.core.ValueInput.createByString('ring_extrude_depth');
+            if (input && distVal) {
+                const distDef = adsk.fusion.DistanceExtentDefinition.create(distVal);
+                if (distDef) { input.setOneSideExtent(distDef, adsk.fusion.ExtentDirections.PositiveExtentDirection); return extrudeFeatures.add(input); }
+            }
+            return null;
+        },
+        () => {
+            const input = extrudeFeatures.createInput(ringProfile!, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const dist = adsk.core.ValueInput.createByReal(depthReal);
+            if (input && dist) { input.setDistanceExtent(false, dist); return extrudeFeatures.add(input); }
+            return null;
         }
-        if (!ringProfile) {
-            continue;
-        }
+    ];
 
-        // Fusion kann bei Cuts ohne Materialentfernung auch eine Exception werfen
+    for (let idx = 0; idx < strategies.length; idx++) {
         let cutFeature: adsk.fusion.ExtrudeFeature | null = null;
         try {
-            const cutInput = extrudeFeatures.createInput(ringProfile, adsk.fusion.FeatureOperations.CutFeatureOperation);
-            if (!cutInput) {
-                throw new Error('Cut-Input für den Stufenabsatz konnte nicht erstellt werden.');
-            }
-            const distStr = sign > 0 ? 'ring_extrude_depth' : '-1 * ring_extrude_depth';
-            let dist = adsk.core.ValueInput.createByString(distStr);
-            if (!dist) {
-                dist = adsk.core.ValueInput.createByReal(sign * params.ringExtrudeDepth.value);
-            }
-            if (!dist) {
-                continue;
-            }
-            cutInput.setDistanceExtent(false, dist);
-            try {
-                cutFeature = extrudeFeatures.add(cutInput);
-            } catch (addErr) {
-                const fallbackDist = adsk.core.ValueInput.createByReal(sign * params.ringExtrudeDepth.value);
-                if (fallbackDist) {
-                    const fallbackCutInput = extrudeFeatures.createInput(ringProfile, adsk.fusion.FeatureOperations.CutFeatureOperation);
-                    if (fallbackCutInput) {
-                        fallbackCutInput.setDistanceExtent(false, fallbackDist);
-                        cutFeature = extrudeFeatures.add(fallbackCutInput);
-                    }
-                }
-            }
+            cutFeature = strategies[idx]();
         } catch (err) {
-            if (err instanceof Error && err.message.includes('Cut-Input')) {
-                throw err; // echtes Input-Problem -> Abbruch
-            }
-            cutFeature = null; // z. B. "Cut removed no material" -> nächstes Vorzeichen
-        }
-        if (!cutFeature) {
+            errors.push(`Strat ${idx + 1}: ${err instanceof Error ? err.message : String(err)}`);
             continue;
         }
 
-        // Erfolgskontrolle: Der Körper muss jetzt eine Zylinderfläche mit
-        // radius = ringInnerDiameter/2 (Außenwand des dünnen Segments) tragen,
-        // deren Achse parallel zur Bein-Achse verläuft.
-        if (hasCylinderOfRadius(body, innerRadius, legAxis.dir)) {
-            return;
+        if (cutFeature) {
+            if (hasCylinderOfRadius(body, innerRadius, legAxis.dir)) {
+                return;
+            }
+            cutFeature.deleteMe();
+            errors.push(`Strat ${idx + 1}: Cut ausgeführt, aber gesuchte Zylinderfläche nicht gefunden`);
+        } else {
+            errors.push(`Strat ${idx + 1}: createInput/add lieferte null`);
         }
-        // Falsche Richtung oder kein Effekt: Cut verwerfen und Vorzeichen umkehren
-        cutFeature.deleteMe();
     }
-    throw new Error('Stufenabsatz (Rücksprung auf ringInnerDiameter) konnte nicht erzeugt werden.');
+
+    throw new Error(`Stufenabsatz (Rücksprung auf ringInnerDiameter) konnte nicht erzeugt werden.\nDetails:\n${errors.join('\n')}`);
 }
 
 /**
@@ -538,7 +641,7 @@ function cutStepShoulder(
  * abweichen kann.)
  */
 function findMaxAreaProfile(
-  profiles: adsk.fusion.Profiles
+    profiles: adsk.fusion.Profiles
 ): adsk.fusion.Profile | null {
     let best: adsk.fusion.Profile | null = null;
     let bestArea = -1;
@@ -562,9 +665,9 @@ function findMaxAreaProfile(
  * zu `axisDir` verlaufen (sonst wird nur der Radius geprüft).
  */
 function hasCylinderOfRadius(
-  body: adsk.fusion.BRepBody,
-  radius: number,
-  axisDir?: {x: number, y: number, z: number}
+    body: adsk.fusion.BRepBody,
+    radius: number,
+    axisDir?: { x: number, y: number, z: number }
 ): boolean {
     for (let i = 0; i < body.faces.count; i++) {
         const face = body.faces.item(i);
@@ -577,7 +680,7 @@ function hasCylinderOfRadius(
         // CylinderSurface-Attribute (radius, axis.direction) per Cast lesen
         const surf = face.geometry as unknown as {
             radius?: number;
-            axis?: {direction?: {x: number, y: number, z: number}};
+            axis?: { direction?: { x: number, y: number, z: number } };
         };
         if (surf.radius === undefined || Math.abs(surf.radius - radius) > TOL) {
             continue;
@@ -603,10 +706,10 @@ function hasCylinderOfRadius(
  *    (z = basePlateHeight) liegt und nahe am Bein-Außendurchmesser verläuft.
  */
 function filletLegPlateJunction(
-  rootComp: adsk.fusion.Component,
-  params: Params,
-  body: adsk.fusion.BRepBody,
-  legAxis: LegAxis
+    rootComp: adsk.fusion.Component,
+    params: Params,
+    body: adsk.fusion.BRepBody,
+    legAxis: LegAxis
 ): void {
     const plateTopZ = params.basePlateHeight.value;
     const legOuterRadius = params.legOuterDiameter.value / 2.0;
@@ -679,9 +782,9 @@ function filletLegPlateJunction(
  * @throws Wenn Fusion den Fillet aktiv ablehnt (z. B. ASM_BL_CANNOT_REORDER).
  */
 function applyConstantRadiusFillet(
-  rootComp: adsk.fusion.Component,
-  edges: adsk.fusion.BRepEdge[],
-  radiusExpr: string
+    rootComp: adsk.fusion.Component,
+    edges: adsk.fusion.BRepEdge[],
+    radiusExpr: string
 ): boolean {
     const filletInput = rootComp.features.filletFeatures.createInput();
     if (!filletInput) {
@@ -692,9 +795,9 @@ function applyConstantRadiusFillet(
         edgeColl.add(e);
     }
     filletInput.edgeSetInputs.addConstantRadiusEdgeSet(
-      edgeColl,
-      adsk.core.ValueInput.createByString(radiusExpr)!,
-      false
+        edgeColl,
+        adsk.core.ValueInput.createByString(radiusExpr)!,
+        false
     );
     const filletFeature = rootComp.features.filletFeatures.add(filletInput);
     if (!filletFeature) {
@@ -724,11 +827,11 @@ function radialDistance(p: adsk.core.Point3D, legAxis: LegAxis): number {
  *    Bein-Achse durch die gesamte Röhre (durchgehend).
  */
 function boreLegHole(
-  rootComp: adsk.fusion.Component,
-  params: Params,
-  tiltedPlane: adsk.fusion.ConstructionPlane,
-  body: adsk.fusion.BRepBody,
-  legAxis: LegAxis
+    rootComp: adsk.fusion.Component,
+    params: Params,
+    tiltedPlane: adsk.fusion.ConstructionPlane,
+    body: adsk.fusion.BRepBody,
+    legAxis: LegAxis
 ): void {
     const holeRadius = params.holeInnerDiameter.value / 2.0;
 
@@ -738,55 +841,88 @@ function boreLegHole(
     if (!sketch) {
         throw new Error('Skizze für die Innenbohrung konnte nicht erstellt werden.');
     }
-    const centerPoint = sketch.modelToSketchSpace(legAxis.end);
+    const centerPoint = adsk.core.Point3D.create(0, 0, 0);
+    if (!centerPoint) {
+        throw new Error('Mittelpunkt (0,0,0) konnte nicht erstellt werden.');
+    }
     sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, holeRadius);
 
-    // Einzelkreis -> exakt ein Profil
     if (sketch.profiles.count < 1) {
         throw new Error('Kein Profil für die Innenbohrung gefunden.');
     }
-    const extrudeFeatures = rootComp.features.extrudeFeatures;
-    // Richtung zur Platte (-Z) wird zuerst geprüft
-    for (const sign of [-1.0, 1.0]) {
-        const profile = findMaxAreaProfile(sketch.profiles);
-        if (!profile) {
-            continue;
-        }
+    const profile = findMaxAreaProfile(sketch.profiles);
+    if (!profile) {
+        throw new Error('Profil der Innenbohrung konnte nicht ermittelt werden.');
+    }
 
-        // Fusion kann bei Cuts ohne Materialentfernung auch eine Exception werfen
+    const extrudeFeatures = rootComp.features.extrudeFeatures;
+    const errors: string[] = [];
+    const totalDistReal = params.legLength.value + params.basePlateHeight.value;
+
+    const strategies: Array<() => adsk.fusion.ExtrudeFeature | null> = [
+        () => {
+            const input = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const dist = adsk.core.ValueInput.createByString('-leg_length - base_plate_height');
+            if (input && dist) { input.setDistanceExtent(false, dist); return extrudeFeatures.add(input); }
+            return null;
+        },
+        () => {
+            const input = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const distVal = adsk.core.ValueInput.createByString('leg_length + base_plate_height');
+            if (input && distVal) {
+                const distDef = adsk.fusion.DistanceExtentDefinition.create(distVal);
+                if (distDef) { input.setOneSideExtent(distDef, adsk.fusion.ExtentDirections.NegativeExtentDirection); return extrudeFeatures.add(input); }
+            }
+            return null;
+        },
+        () => {
+            const input = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const dist = adsk.core.ValueInput.createByReal(-1.0 * totalDistReal);
+            if (input && dist) { input.setDistanceExtent(false, dist); return extrudeFeatures.add(input); }
+            return null;
+        },
+        () => {
+            const input = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const dist = adsk.core.ValueInput.createByString('leg_length + base_plate_height');
+            if (input && dist) { input.setDistanceExtent(false, dist); return extrudeFeatures.add(input); }
+            return null;
+        },
+        () => {
+            const input = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const distVal = adsk.core.ValueInput.createByString('leg_length + base_plate_height');
+            if (input && distVal) {
+                const distDef = adsk.fusion.DistanceExtentDefinition.create(distVal);
+                if (distDef) { input.setOneSideExtent(distDef, adsk.fusion.ExtentDirections.PositiveExtentDirection); return extrudeFeatures.add(input); }
+            }
+            return null;
+        },
+        () => {
+            const input = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const dist = adsk.core.ValueInput.createByReal(totalDistReal);
+            if (input && dist) { input.setDistanceExtent(false, dist); return extrudeFeatures.add(input); }
+            return null;
+        }
+    ];
+
+    for (let idx = 0; idx < strategies.length; idx++) {
         let cutFeature: adsk.fusion.ExtrudeFeature | null = null;
         try {
-            const cutInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
-            if (!cutInput) {
-                throw new Error('Cut-Input für die Innenbohrung konnte nicht erstellt werden.');
-            }
-            // Durchgehende Bohrung: über die gesamte Beinlänge + Plattenhöhe
-            // (der Überstand endet in leerem Raum unterhalb des Plattenbodens)
-            const distStr = sign > 0 ? '(leg_length + base_plate_height)' : '-1 * (leg_length + base_plate_height)';
-            const dist = adsk.core.ValueInput.createByString(distStr);
-            if (!dist) {
-                continue;
-            }
-            cutInput.setDistanceExtent(false, dist);
-            cutFeature = extrudeFeatures.add(cutInput);
+            cutFeature = strategies[idx]();
         } catch (err) {
-            if (err instanceof Error && err.message.includes('Cut-Input')) {
-                throw err; // echtes Input-Problem -> Abbruch
-            }
-            cutFeature = null; // z. B. "Cut removed no material" -> nächstes Vorzeichen
-        }
-        if (!cutFeature) {
+            errors.push(`Strat ${idx + 1}: ${err instanceof Error ? err.message : String(err)}`);
             continue;
         }
 
-        // Erfolgskontrolle: Der Körper muss jetzt eine Zylinderfläche mit
-        // radius = holeInnerDiameter/2 (Bohrung) tragen, deren Achse parallel
-        // zur Bein-Achse verläuft.
-        if (hasCylinderOfRadius(body, holeRadius, legAxis.dir)) {
-            return;
+        if (cutFeature) {
+            if (hasCylinderOfRadius(body, holeRadius, legAxis.dir)) {
+                return;
+            }
+            cutFeature.deleteMe();
+            errors.push(`Strat ${idx + 1}: Cut ausgeführt, aber Bohrung-Zylinderfläche nicht gefunden`);
+        } else {
+            errors.push(`Strat ${idx + 1}: createInput/add lieferte null`);
         }
-        // Falsche Richtung oder kein Effekt: Cut verwerfen und Vorzeichen umkehren
-        cutFeature.deleteMe();
     }
-    throw new Error('Innenbohrung konnte nicht erzeugt werden.');
+
+    throw new Error(`Innenbohrung konnte nicht erzeugt werden.\nDetails:\n${errors.join('\n')}`);
 }
