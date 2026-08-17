@@ -52,6 +52,9 @@ export function run(_context: string): void {
         // 9. Unterseite bündig schneiden (Überstand unterhalb z=0 abtrennen)
         trimBottomFlush(rootComp, params);
 
+        // 10. Gebogener Kabelkanal an der Unterseite mit Zugsicherung
+        createBottomCableChannel(rootComp, params);
+
         console.log('Erfolgreich generiert!');
 
     } catch (e) {
@@ -104,7 +107,12 @@ function setupParameters(design: adsk.fusion.Design) {
         legLength: getOrCreateParam('leg_length', '100mm', 'mm', 'Laenge der Röhre'),
         legAngle: getOrCreateParam('leg_angle', '120', 'degree', 'Winkel des Beines zur XY-Ebene (Innenwinkel an der Platte)'),
         legOffset: getOrCreateParam('leg_offset', '45mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
-        legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante: Bein und Platte (wird bei Solver-Problemen automatisch verkleinert)')
+        legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante: Bein und Platte (wird bei Solver-Problemen automatisch verkleinert)'),
+        cableChannelWidth: getOrCreateParam('cable_channel_width', '7.5mm', 'mm', 'Breite des unterseitigen Kabelkanals'),
+        cableChannelDepth: getOrCreateParam('cable_channel_depth', '5mm', 'mm', 'Tiefe des unterseitigen Kabelkanals'),
+        cableChannelAmplitude: getOrCreateParam('cable_channel_amplitude', '5mm', 'mm', 'Sinus-Amplitude des Kabelkanals für Zugentlastung'),
+        strainReliefScrewDiameter: getOrCreateParam('strain_relief_screw_diameter', '2.6mm', 'mm', 'Bohrungsdurchmesser für M3-Zugsicherungsschellen'),
+        strainReliefScrewDepth: getOrCreateParam('strain_relief_screw_depth', '6mm', 'mm', 'Bohrungstiefe für M3-Zugsicherungsschellen')
     };
 }
 
@@ -992,6 +1000,177 @@ function trimBottomFlush(rootComp: adsk.fusion.Component, params: Params): void 
         if (fallbackInput) {
             fallbackInput.setDistanceExtent(false, fallbackDist);
             extrudeFeatures.add(fallbackInput);
+        }
+    }
+}
+
+/**
+ * 10) Gebogener Kabelkanal an der Unterseite der Basis-Platte mit Zugsicherung:
+ *     - Verläuft sinusförmig vom Außenrand der Platte bis zur Mitte der Beinbohrung (legOffset, 0, 0).
+ *     - An der Unterseite (z=0) offen, extrudierter Schnitt nach oben (+Z) um cableChannelDepth.
+ *     - Zeichnet 2 Schraubloch-Paare (strainReliefScrewDiameter) links und rechts vom Kanal,
+ *       um Zugsicherungsschellen (Zugentlastung) per M3-Schraube zu montieren.
+ */
+function createBottomCableChannel(rootComp: adsk.fusion.Component, params: Params): void {
+    const sketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
+    if (!sketch) {
+        throw new Error('Skizze für den unterseitigen Kabelkanal konnte nicht erstellt werden.');
+    }
+
+    const outerRadius = params.basePlateDiameter.value / 2.0; // cm
+    const legOffsetVal = params.legOffset.value; // cm
+    const widthVal = params.cableChannelWidth.value; // cm
+    const ampVal = params.cableChannelAmplitude.value; // cm
+
+    // Pfadstart etwas außerhalb des Plattenrands (+0.5 cm = +5mm), damit der Außenrand sauber durchschnitten wird
+    const xStart = outerRadius + 0.5;
+    const xEnd = legOffsetVal;
+    const deltaX = xStart - xEnd;
+
+    // Sinuswellen-Anzahl (1.5 Wellen erzeugen eine S-Kurve für Zugentlastung)
+    const waves = 1.5;
+
+    const numPoints = 30;
+    const leftPoints = adsk.core.ObjectCollection.create();
+    const rightPoints = adsk.core.ObjectCollection.create();
+    if (!leftPoints || !rightPoints) {
+        throw new Error('ObjectCollection für Kabelkanal-Punkte konnte nicht erstellt werden.');
+    }
+
+    const tScrew1 = 0.35;
+    const tScrew2 = 0.70;
+    const screwOffsetFromCenter = (widthVal / 2.0) + 0.3; // 3mm außerhalb des Kanalrandes
+
+    let screwPt1Left: adsk.core.Point3D | null = null;
+    let screwPt1Right: adsk.core.Point3D | null = null;
+    let screwPt2Left: adsk.core.Point3D | null = null;
+    let screwPt2Right: adsk.core.Point3D | null = null;
+
+    let firstLeft: adsk.core.Point3D | null = null;
+    let firstRight: adsk.core.Point3D | null = null;
+    let lastLeft: adsk.core.Point3D | null = null;
+    let lastRight: adsk.core.Point3D | null = null;
+
+    for (let i = 0; i <= numPoints; i++) {
+        const t = i / numPoints;
+        const x = xStart - t * deltaX;
+        const y = ampVal * Math.sin(t * Math.PI * 2.0 * waves);
+
+        // Ableitung (dx/dt, dy/dt) zur Ermittlung der Kanalnormale
+        const dxdt = -deltaX;
+        const dydt = ampVal * (2.0 * Math.PI * waves) * Math.cos(t * Math.PI * 2.0 * waves);
+        const len = Math.sqrt(dxdt * dxdt + dydt * dydt);
+
+        // Normale (senkrecht zur Bewegungsrichtung): nx = -dy/dt / len, ny = dx/dt / len
+        const nx = -dydt / len;
+        const ny = dxdt / len;
+
+        const halfW = widthVal / 2.0;
+        const xl = x + nx * halfW;
+        const yl = y + ny * halfW;
+        const xr = x - nx * halfW;
+        const yr = y - ny * halfW;
+
+        const pL = adsk.core.Point3D.create(xl, yl, 0);
+        const pR = adsk.core.Point3D.create(xr, yr, 0);
+        if (!pL || !pR) {
+            continue;
+        }
+
+        leftPoints.add(pL);
+        rightPoints.add(pR);
+
+        if (i === 0) {
+            firstLeft = pL;
+            firstRight = pR;
+        }
+        if (i === numPoints) {
+            lastLeft = pL;
+            lastRight = pR;
+        }
+
+        // Schraubpunkte an den festgelegten t-Positionen berechnen
+        if (Math.abs(t - tScrew1) < (0.6 / numPoints)) {
+            screwPt1Left = adsk.core.Point3D.create(x + nx * screwOffsetFromCenter, y + ny * screwOffsetFromCenter, 0);
+            screwPt1Right = adsk.core.Point3D.create(x - nx * screwOffsetFromCenter, y - ny * screwOffsetFromCenter, 0);
+        }
+        if (Math.abs(t - tScrew2) < (0.6 / numPoints)) {
+            screwPt2Left = adsk.core.Point3D.create(x + nx * screwOffsetFromCenter, y + ny * screwOffsetFromCenter, 0);
+            screwPt2Right = adsk.core.Point3D.create(x - nx * screwOffsetFromCenter, y - ny * screwOffsetFromCenter, 0);
+        }
+    }
+
+    // Sinuskurven für linken und rechten Rand skizzieren
+    const splines = sketch.sketchCurves.sketchFittedSplines;
+    const leftSpline = splines.add(leftPoints);
+    const rightSpline = splines.add(rightPoints);
+    if (!leftSpline || !rightSpline) {
+        throw new Error('Sinus-Splines für den Kabelkanal konnten nicht skizziert werden.');
+    }
+
+    // Enden verbinden, um ein geschlossenes Profil zu erzeugen
+    const lines = sketch.sketchCurves.sketchLines;
+    if (firstLeft && firstRight) {
+        lines.addByTwoPoints(firstLeft, firstRight);
+    }
+    if (lastLeft && lastRight) {
+        lines.addByTwoPoints(lastLeft, lastRight);
+    }
+
+    if (sketch.profiles.count === 0) {
+        throw new Error('Profil für den Kabelkanal konnte nicht in der Skizze ermittelt werden.');
+    }
+
+    const channelProfile = sketch.profiles.item(0);
+    if (!channelProfile) {
+        throw new Error('Profil des Kabelkanals konnte nicht gelesen werden.');
+    }
+
+    // Offener Kabelkanal an der Unterseite: Extruded Cut nach oben (+Z) um cable_channel_depth
+    const extrudeFeatures = rootComp.features.extrudeFeatures;
+    const cutInput = extrudeFeatures.createInput(channelProfile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+    if (!cutInput) {
+        throw new Error('Cut-Input für den Kabelkanal konnte nicht erstellt werden.');
+    }
+
+    const depthDist = adsk.core.ValueInput.createByString('cable_channel_depth');
+    if (!depthDist) {
+        throw new Error('Parameterwert für cable_channel_depth ungültig.');
+    }
+    cutInput.setDistanceExtent(false, depthDist);
+    const channelCutFeature = extrudeFeatures.add(cutInput);
+    if (!channelCutFeature) {
+        throw new Error('Kabelkanal-Extrusion (Cut) konnte nicht ausgeführt werden.');
+    }
+
+    // Zugsicherungs-Bohrungen (2 Schraubloch-Paare links/rechts vom Kanal für M3-Klemmen)
+    const screwSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
+    if (!screwSketch) {
+        throw new Error('Skizze für Zugsicherungs-Bohrungen konnte nicht erstellt werden.');
+    }
+
+    const screwRadius = params.strainReliefScrewDiameter.value / 2.0;
+    const screwPts = [screwPt1Left, screwPt1Right, screwPt2Left, screwPt2Right].filter((p): p is adsk.core.Point3D => p !== null);
+
+    for (const pt of screwPts) {
+        screwSketch.sketchCurves.sketchCircles.addByCenterRadius(pt, screwRadius);
+    }
+
+    if (screwSketch.profiles.count > 0) {
+        const screwProfColl = adsk.core.ObjectCollection.create();
+        if (screwProfColl) {
+            for (let i = 0; i < screwSketch.profiles.count; i++) {
+                const prof = screwSketch.profiles.item(i);
+                if (prof) {
+                    screwProfColl.add(prof);
+                }
+            }
+            const screwCutInput = extrudeFeatures.createInput(screwProfColl, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const screwDepthDist = adsk.core.ValueInput.createByString('strain_relief_screw_depth');
+            if (screwCutInput && screwDepthDist) {
+                screwCutInput.setDistanceExtent(false, screwDepthDist);
+                extrudeFeatures.add(screwCutInput);
+            }
         }
     }
 }
