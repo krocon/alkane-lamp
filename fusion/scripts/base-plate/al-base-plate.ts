@@ -49,6 +49,9 @@ export function run(_context: string): void {
         // 8. Durchgehende Innenbohrung (holeInnerDiameter) entlang der Beinachse (Cut)
         boreLegHole(rootComp, params, tiltedPlane, legTube.body, legAxis);
 
+        // 9. Unterseite bündig schneiden (Überstand unterhalb z=0 abtrennen)
+        trimBottomFlush(rootComp, params);
+
         console.log('Erfolgreich generiert!');
 
     } catch (e) {
@@ -925,4 +928,66 @@ function boreLegHole(
     }
 
     throw new Error(`Innenbohrung konnte nicht erzeugt werden.\nDetails:\n${errors.join('\n')}`);
+}
+
+/**
+ * 9) Unterseite bündig schneiden:
+ *    Schneidet jeglichen Geometrieüberstand unterhalb der XY-Ebene (z < 0) ab,
+ *    sodass die Unterseite der Basis-Platte vollständig plan ist.
+ */
+function trimBottomFlush(rootComp: adsk.fusion.Component, params: Params): void {
+    const sketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
+    if (!sketch) {
+        throw new Error('Skizze für den Unterseiten-Schnitt konnte nicht erstellt werden.');
+    }
+
+    const center = adsk.core.Point3D.create(0, 0, 0);
+    if (!center) {
+        throw new Error('Mittelpunkt (0,0,0) für den Unterseiten-Schnitt konnte nicht erstellt werden.');
+    }
+
+    // Großes Profil (doppelter Plattendurchmesser), das garantiert alle überstehenden Teile erfasst
+    const cutRadius = params.basePlateDiameter.value;
+    sketch.sketchCurves.sketchCircles.addByCenterRadius(center, cutRadius);
+
+    if (sketch.profiles.count === 0) {
+        throw new Error('Kein Profil für den Unterseiten-Schnitt gefunden.');
+    }
+    const profile = sketch.profiles.item(0);
+    if (!profile) {
+        throw new Error('Profil für den Unterseiten-Schnitt konnte nicht gelesen werden.');
+    }
+
+    const extrudeFeatures = rootComp.features.extrudeFeatures;
+    const cutInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+    if (!cutInput) {
+        throw new Error('Cut-Input für den Unterseiten-Schnitt konnte nicht erstellt werden.');
+    }
+
+    // Extrusion nach unten (in negative Z-Richtung relativ zur XY-Ebene)
+    const distVal = adsk.core.ValueInput.createByString('leg_length + base_plate_height');
+    if (distVal) {
+        const distDef = adsk.fusion.DistanceExtentDefinition.create(distVal);
+        if (distDef) {
+            cutInput.setOneSideExtent(distDef, adsk.fusion.ExtentDirections.NegativeExtentDirection);
+            try {
+                const cutFeat = extrudeFeatures.add(cutInput);
+                if (cutFeat) {
+                    return;
+                }
+            } catch (_err) {
+                // Fallback unten
+            }
+        }
+    }
+
+    // Fallback mit createByReal wenn setOneSideExtent/String fehlschlägt
+    const fallbackDist = adsk.core.ValueInput.createByReal(-1.0 * (params.legLength.value + params.basePlateHeight.value));
+    if (fallbackDist) {
+        const fallbackInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+        if (fallbackInput) {
+            fallbackInput.setDistanceExtent(false, fallbackDist);
+            extrudeFeatures.add(fallbackInput);
+        }
+    }
 }
