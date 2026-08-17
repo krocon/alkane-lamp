@@ -77,7 +77,7 @@ function setupParameters(design: adsk.fusion.Design) {
 
   return {
     armOuterDiameter: getOrCreateParam('arm_outer_diameter', '46mm', 'mm', 'Aussendurchmesser der Arme'),
-    armDepthLong: getOrCreateParam('arm_depth_long', '80mm', 'mm', 'Armlaenge aller 4 Arme gemessen vom Zentrum'),
+    armDepthLong: getOrCreateParam('arm_depth_long', '55mm', 'mm', 'Armlaenge aller 4 Arme gemessen vom Zentrum'),
     ringInnerDiameter: getOrCreateParam('ring_inner_diameter', '40mm', 'mm', 'Durchmesser der erhabenen Stirnflaeche'),
     ringExtrudeDepth: getOrCreateParam('ring_extrude_depth', '17mm', 'mm', 'Tiefe des Rumpfabsatzes / Rücksprungs'),
     filletRadius: getOrCreateParam('fillet_radius', '25mm', 'mm', 'Radius fuer die Knotenabrundung (Sehnenlaenge)'),
