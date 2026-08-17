@@ -103,6 +103,7 @@ function setupParameters(design: adsk.fusion.Design) {
         holeInnerDiameter: getOrCreateParam('hole_inner_diameter', '31.5mm', 'mm', 'Innendurchmesser der Röhre (Loch)'),
         legLength: getOrCreateParam('leg_length', '80mm', 'mm', 'Laenge der Röhre'),
         legAngle: getOrCreateParam('leg_angle', '120', 'degree', 'Winkel des Beines zur XY-Ebene (Innenwinkel an der Platte)'),
+        legOffset: getOrCreateParam('leg_offset', '45mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
         legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante: Bein und Platte (wird bei Solver-Problemen automatisch verkleinert)')
     };
 }
@@ -238,9 +239,10 @@ function createLegAxis(rootComp: adsk.fusion.Component, params: Params): LegAxis
     const angleRad = params.legAngle.value;
     const dir = { x: Math.cos(angleRad), y: 0, z: Math.sin(angleRad) };
     const legLen = params.legLength.value;
+    const offset = params.legOffset.value;
 
-    const start = adsk.core.Point3D.create(0, 0, 0);
-    const end = adsk.core.Point3D.create(legLen * dir.x, legLen * dir.y, legLen * dir.z);
+    const start = adsk.core.Point3D.create(offset, 0, 0);
+    const end = adsk.core.Point3D.create(offset + legLen * dir.x, legLen * dir.y, legLen * dir.z);
     if (!start || !end) {
         throw new Error('Konnte die Achsenpunkte (Start/Ende) der Bein-Achse nicht erstellen.');
     }
