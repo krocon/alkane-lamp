@@ -71,7 +71,7 @@ function setupParameters(design: adsk.fusion.Design) {
 
     return {
         legOuterDiameter: getOrCreateParam('leg_outer_diameter', '46mm', 'mm', 'Aussendurchmesser der Röhre'),
-        legInnerDiameter: getOrCreateParam('leg_inner_diameter', '40.05mm', 'mm', 'Innendurchmesser der Röhre'),
+        legInnerDiameter: getOrCreateParam('leg_inner_diameter', '40.025mm', 'mm', 'Innendurchmesser der Röhre'),
         legLength: getOrCreateParam('leg_length', '80mm', 'mm', 'Laenge der Röhre')
     };
 }

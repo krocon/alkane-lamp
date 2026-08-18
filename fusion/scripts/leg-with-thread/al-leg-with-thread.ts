@@ -34,7 +34,7 @@ export function run(_context: string): void {
         // 4. Rohr aufbohren (vom Gewinde Richtung Ursprung für 27.5 mm)
         boreOutLongArm(rootComp, params);
 
-        // 5. Zweites Loch vom Ursprung aufbohren (Länge: 32.50 mm, Durchmesser: 40.05 mm)
+        // 5. Zweites Loch vom Ursprung aufbohren (Länge: 32.50 mm, Durchmesser: 40.025 mm)
         boreOutFromOrigin(rootComp);
 
         console.log('Erfolgreich generiert!');
@@ -268,7 +268,7 @@ function boreOutLongArm(
 
 /**
  * Bohrt das zweite Loch vom Ursprung in Richtung der Z-Achse auf.
- * Ziel: 40.05mm Durchmesser, Länge 32.50mm in Richtung der Z-Achse (in das Rohr).
+ * Ziel: 40.025mm Durchmesser, Länge 32.50mm in Richtung der Z-Achse (in das Rohr).
  *
  * @param rootComp Die Wurzelkomponente des Designs.
  */
@@ -276,7 +276,7 @@ function boreOutFromOrigin(rootComp: adsk.fusion.Component): void {
     const sketches = rootComp.sketches;
     const sketch = sketches.add(rootComp.xYConstructionPlane);
 
-    // Kreis mit 40.05mm Durchmesser (Radius: 2.0025 cm)
+    // Kreis mit 40.025mm Durchmesser (Radius: 2.0025 cm)
     const diameterCm = 4.005;
     sketch.sketchCurves.sketchCircles.addByCenterRadius(
       adsk.core.Point3D.create(0, 0, 0),
