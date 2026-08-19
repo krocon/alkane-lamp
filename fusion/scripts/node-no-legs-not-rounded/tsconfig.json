@@ -1,20 +1,3 @@
 {
-	"compilerOptions":	{
-		"target":	"ES2020",
-		"module":	"ESNext",
-		"moduleResolution":	"bundler",
-		"strict":	true,
-		"esModuleInterop":	true,
-		"skipLibCheck":	true,
-		"forceConsistentCasingInFileNames":	true,
-		"outDir":	"./out",
-		"rootDir":	".",
-		"paths":	{
-			"@adsk/*":	["../../lib/API/TypeScript/@adsk/*"],
-			"fs":	["../../lib/API/TypeScript/fs/index.d.ts"],
-			"fs/promises":	["../../lib/API/TypeScript/fs/promises.d.ts"]
-		}
-	},
-	"include":	["**/*.ts"],
-	"exclude":	["node_modules", "out"]
+  "extends": "../../../tsconfig.json"
 }

@@ -1,0 +1,14 @@
+{
+  "name": "alkane-lamp",
+  "version": "1.0.0",
+  "description": "Fusion 360 3D Lamp Parametric Generator Scripts",
+  "private": true,
+  "scripts": {
+    "i": "npm i",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

@@ -200,7 +200,7 @@ function addLongArmThread(
     let offsetCm = faceHeight - threadLengthCm;
     if (offsetCm < 0) offsetCm = 0;
 
-    threadInput.offset = adsk.core.ValueInput.createByReal(offsetCm);
+    threadInput.threadOffset = adsk.core.ValueInput.createByReal(offsetCm);
     threadInput.threadLength = adsk.core.ValueInput.createByReal(threadLengthCm);
 
     const threadFeature = threadFeatures.add(threadInput);
@@ -210,19 +210,23 @@ function addLongArmThread(
     }
 
     // 4. Gewinde weiten (Toleranzberücksichtigung durch Drücken/Ziehen)
-    const facesToOffset = adsk.core.ObjectCollection.create();
+    const facesToOffset: adsk.fusion.BRepFace[] = [];
     for (let i = 0; i < threadFeature.faces.count; i++) {
-        facesToOffset.add(threadFeature.faces.item(i));
+        const f = threadFeature.faces.item(i);
+        if (f) {
+            facesToOffset.push(f);
+        }
     }
 
-    if (facesToOffset.count > 0) {
+    if (facesToOffset.length > 0) {
         const offsetFeatures = features.offsetFacesFeatures;
         const offsetInput = offsetFeatures.createInput(
           facesToOffset,
-          adsk.core.ValueInput.createByString("-0.1mm"),
-          true // isChainFaces
+          adsk.core.ValueInput.createByString("-0.1mm")
         );
-        offsetFeatures.add(offsetInput);
+        if (offsetInput) {
+            offsetFeatures.add(offsetInput);
+        }
     }
 }
 
