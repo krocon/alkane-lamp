@@ -1119,6 +1119,43 @@ function createBottomCableChannel(rootComp: adsk.fusion.Component, params: Param
 }
 
 /**
+ * Zeichnet ein exaktes ringförmiges Sektor-Profil mit zwei echten Kreisbögen (sketchArcs)
+ * und zwei radialen Verbindungslinien. Dadurch wird das Durchbiegen von geraden Sehnen
+ * vermieden und die Bajonett-Nuten schneiden präzise in die zylindrische Außenwand.
+ */
+function drawAnnularSector(
+    sketch: adsk.fusion.Sketch,
+    center: adsk.core.Point3D,
+    rIn: number,
+    rOut: number,
+    startAngle: number,
+    sweepAngle: number
+): void {
+    const endAngle = startAngle + sweepAngle;
+
+    const pIn1 = adsk.core.Point3D.create(rIn * Math.cos(startAngle), rIn * Math.sin(startAngle), 0);
+    const pOut1 = adsk.core.Point3D.create(rOut * Math.cos(startAngle), rOut * Math.sin(startAngle), 0);
+    const pOut2 = adsk.core.Point3D.create(rOut * Math.cos(endAngle), rOut * Math.sin(endAngle), 0);
+    const pIn2 = adsk.core.Point3D.create(rIn * Math.cos(endAngle), rIn * Math.sin(endAngle), 0);
+
+    if (!pIn1 || !pOut1 || !pOut2 || !pIn2) {
+        return;
+    }
+
+    const lines = sketch.sketchCurves.sketchLines;
+    const arcs = sketch.sketchCurves.sketchArcs;
+
+    // Radiale Linie bei startAngle
+    lines.addByTwoPoints(pIn1, pOut1);
+    // Äußerer Kreisbogen von startAngle nach endAngle (Radius rOut)
+    arcs.addByCenterStartSweep(center, pOut1, sweepAngle);
+    // Radiale Linie bei endAngle
+    lines.addByTwoPoints(pOut2, pIn2);
+    // Innerer Kreisbogen von startAngle nach endAngle (Radius rIn)
+    arcs.addByCenterStartSweep(center, pIn1, sweepAngle);
+}
+
+/**
  * 11) Zweite Unterplatte (Abdeckung) & unsichtbarer Bajonett-Verschluss:
  *     - An der Unterseite der Hauptplatte wird eine kreisförmige Vertiefung
  *       (coverPlateDiameter, Tiefe coverPlateThickness) eingeschnitten.
@@ -1163,7 +1200,7 @@ function createBottomCoverPlate(rootComp: adsk.fusion.Component, params: Params)
     extrudeFeatures.add(recessCutInput);
 
     // =========================================================================
-    // TEIL B: 4 unsichtbare L-förmige Bajonett-Nuten an der Innenwand der Vertiefung
+    // TEIL B: 4 L-förmige Bajonett-Nuten an der Innenwand der Vertiefung
     // =========================================================================
     const numTabs = 4;
     const tabWidthAngle = Math.PI / 18; // ~10 Grad Breite der Eintrete-Nut
@@ -1171,33 +1208,46 @@ function createBottomCoverPlate(rootComp: adsk.fusion.Component, params: Params)
     const tabHeight = coverThickness * 0.4; // 1.2mm Höhe der Verriegelungs-Nut
     const tabDepth = 0.15; // 1.5mm Tiefe der Nut im Rand
 
-    const slotSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
-    if (!slotSketch) {
-        throw new Error('Skizze für Bajonett-Nuten konnte nicht erstellt werden.');
+    // TEIL B.1: Vertikale Eintrete-Nuten (Entry Slots: Z = 0 bis Z = coverThickness)
+    const entrySketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
+    if (!entrySketch) {
+        throw new Error('Skizze für Bajonett-Eintrete-Nuten konnte nicht erstellt werden.');
     }
-
-    // Skizziere die 4 Eintrete- und Verriegelungs-Sektoren für die Hauptplatte
     for (let i = 0; i < numTabs; i++) {
         const baseAngle = (i * 2.0 * Math.PI) / numTabs;
-        const a1 = baseAngle - tabWidthAngle / 2.0;
-        const a2 = baseAngle + tabWidthAngle / 2.0 + twistAngle;
+        const startAngle = baseAngle - tabWidthAngle / 2.0;
+        drawAnnularSector(entrySketch, center, coverRadius, coverRadius + tabDepth, startAngle, tabWidthAngle);
+    }
 
-        const rIn = coverRadius;
-        const rOut = coverRadius + tabDepth;
-
-        // Bogenaußen- und Innenpunkte für das L-förmige Nutensegment
-        const pIn1 = adsk.core.Point3D.create(rIn * Math.cos(a1), rIn * Math.sin(a1), 0);
-        const pOut1 = adsk.core.Point3D.create(rOut * Math.cos(a1), rOut * Math.sin(a1), 0);
-        const pOut2 = adsk.core.Point3D.create(rOut * Math.cos(a2), rOut * Math.sin(a2), 0);
-        const pIn2 = adsk.core.Point3D.create(rIn * Math.cos(a2), rIn * Math.sin(a2), 0);
-
-        if (pIn1 && pOut1 && pOut2 && pIn2) {
-            const l = slotSketch.sketchCurves.sketchLines;
-            l.addByTwoPoints(pIn1, pOut1);
-            l.addByTwoPoints(pOut1, pOut2);
-            l.addByTwoPoints(pOut2, pIn2);
-            l.addByTwoPoints(pIn2, pIn1);
+    if (entrySketch.profiles.count > 0) {
+        const entryProfColl = adsk.core.ObjectCollection.create();
+        if (entryProfColl) {
+            for (let i = 0; i < entrySketch.profiles.count; i++) {
+                const prof = entrySketch.profiles.item(i);
+                if (prof) {
+                    entryProfColl.add(prof);
+                }
+            }
+            const entryCutInput = extrudeFeatures.createInput(entryProfColl, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const entryDist = adsk.core.ValueInput.createByString('cover_plate_thickness');
+            if (entryCutInput && entryDist) {
+                entryCutInput.setDistanceExtent(false, entryDist);
+                extrudeFeatures.add(entryCutInput);
+            }
         }
+    }
+
+    // TEIL B.2: Horizontale Verriegelungs-Nuten (Locking Grooves: Z = coverThickness - tabHeight bis Z = coverThickness)
+    const slotSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
+    if (!slotSketch) {
+        throw new Error('Skizze für Bajonett-Verriegelungsnuten konnte nicht erstellt werden.');
+    }
+
+    for (let i = 0; i < numTabs; i++) {
+        const baseAngle = (i * 2.0 * Math.PI) / numTabs;
+        const startAngle = baseAngle - tabWidthAngle / 2.0;
+        const sweepAngle = tabWidthAngle + twistAngle;
+        drawAnnularSector(slotSketch, center, coverRadius, coverRadius + tabDepth, startAngle, sweepAngle);
     }
 
     if (slotSketch.profiles.count > 0) {
@@ -1212,7 +1262,6 @@ function createBottomCoverPlate(rootComp: adsk.fusion.Component, params: Params)
             const slotCutInput = extrudeFeatures.createInput(slotProfColl, adsk.fusion.FeatureOperations.CutFeatureOperation);
             const slotDist = adsk.core.ValueInput.createByReal(tabHeight);
             if (slotCutInput && slotDist) {
-                // Cut im oberen Bereich der Vertiefung (z = coverThickness - tabHeight bis coverThickness)
                 const startDef = adsk.fusion.OffsetStartDefinition.create(adsk.core.ValueInput.createByReal(coverThickness - tabHeight)!);
                 if (startDef) {
                     slotCutInput.startExtent = startDef;
@@ -1229,58 +1278,83 @@ function createBottomCoverPlate(rootComp: adsk.fusion.Component, params: Params)
     const clearance = 0.02; // 0.2mm Drucktoleranz
     const plateRadius = coverRadius - clearance;
 
+    // TEIL C.1: Haupt-Kreisscheibe der Abdeckplatte (Z = 0 bis Z = coverThickness)
     const plateSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
     if (!plateSketch) {
         throw new Error('Skizze für zweite Unterplatte konnte nicht erstellt werden.');
     }
-
-    // Hauptkreis der Abdeckplatte
     plateSketch.sketchCurves.sketchCircles.addByCenterRadius(center, plateRadius);
 
-    // 4 radiale Bajonett-Rastnasen am Umfang skizzieren
-    for (let i = 0; i < numTabs; i++) {
-        const baseAngle = (i * 2.0 * Math.PI) / numTabs;
-        const a1 = baseAngle - (tabWidthAngle * 0.8) / 2.0;
-        const a2 = baseAngle + (tabWidthAngle * 0.8) / 2.0;
-
-        const rIn = plateRadius - 0.1;
-        const rOut = coverRadius + tabDepth - clearance;
-
-        const p1 = adsk.core.Point3D.create(rIn * Math.cos(a1), rIn * Math.sin(a1), 0);
-        const p2 = adsk.core.Point3D.create(rOut * Math.cos(a1), rOut * Math.sin(a1), 0);
-        const p3 = adsk.core.Point3D.create(rOut * Math.cos(a2), rOut * Math.sin(a2), 0);
-        const p4 = adsk.core.Point3D.create(rIn * Math.cos(a2), rIn * Math.sin(a2), 0);
-
-        if (p1 && p2 && p3 && p4) {
-            const l = plateSketch.sketchCurves.sketchLines;
-            l.addByTwoPoints(p1, p2);
-            l.addByTwoPoints(p2, p3);
-            l.addByTwoPoints(p3, p4);
-            l.addByTwoPoints(p4, p1);
-        }
+    if (plateSketch.profiles.count === 0) {
+        throw new Error('Profil für die Grundscheibe der Unterplatte nicht gefunden.');
+    }
+    const plateProf = plateSketch.profiles.item(0);
+    if (!plateProf) {
+        throw new Error('Profil der Grundscheibe konnte nicht gelesen werden.');
     }
 
-    if (plateSketch.profiles.count > 0) {
-        const plateProfColl = adsk.core.ObjectCollection.create();
-        if (plateProfColl) {
-            for (let i = 0; i < plateSketch.profiles.count; i++) {
-                const prof = plateSketch.profiles.item(i);
+    const plateExtInput = extrudeFeatures.createInput(plateProf, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+    const plateDistVal = adsk.core.ValueInput.createByString('cover_plate_thickness');
+    if (!plateExtInput || !plateDistVal) {
+        throw new Error('Extrusion der Grundscheibe der Abdeckplatte konnte nicht initialisiert werden.');
+    }
+    plateExtInput.setDistanceExtent(false, plateDistVal);
+    const plateExtFeat = extrudeFeatures.add(plateExtInput);
+    if (!plateExtFeat || plateExtFeat.bodies.count === 0) {
+        throw new Error('Grundscheibe der Abdeckplatte konnte nicht extrudiert werden.');
+    }
+    const coverBody = plateExtFeat.bodies.item(0)!;
+
+    // TEIL C.2: 4 radiale Rastnasen an der Abdeckplatte (nur im oberen Bereich Z = coverThickness - tabHeight bis coverThickness)
+    const tabSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
+    if (!tabSketch) {
+        throw new Error('Skizze für Bajonett-Rastnasen der Unterplatte konnte nicht erstellt werden.');
+    }
+    for (let i = 0; i < numTabs; i++) {
+        const baseAngle = (i * 2.0 * Math.PI) / numTabs;
+        const tabSweep = tabWidthAngle * 0.8;
+        const startAngle = baseAngle - tabSweep / 2.0;
+        const rIn = plateRadius - 0.1;
+        const rOut = coverRadius + tabDepth - clearance;
+        drawAnnularSector(tabSketch, center, rIn, rOut, startAngle, tabSweep);
+    }
+
+    if (tabSketch.profiles.count > 0) {
+        const tabProfColl = adsk.core.ObjectCollection.create();
+        if (tabProfColl) {
+            for (let i = 0; i < tabSketch.profiles.count; i++) {
+                const prof = tabSketch.profiles.item(i);
                 if (prof) {
-                    plateProfColl.add(prof);
+                    tabProfColl.add(prof);
                 }
             }
-            // Extrudiere als NEUEN KÖRPER (NewBodyFeatureOperation), damit Platte 1 und 2 getrennt bleiben!
-            const plateExtInput = extrudeFeatures.createInput(plateProfColl, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
-            const plateDistVal = adsk.core.ValueInput.createByString('cover_plate_thickness');
-            if (plateExtInput && plateDistVal) {
-                plateExtInput.setDistanceExtent(false, plateDistVal);
-                extrudeFeatures.add(plateExtInput);
+            const tabExtInput = extrudeFeatures.createInput(tabProfColl, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+            const tabDistVal = adsk.core.ValueInput.createByReal(tabHeight);
+            if (tabExtInput && tabDistVal) {
+                const startDef = adsk.fusion.OffsetStartDefinition.create(adsk.core.ValueInput.createByReal(coverThickness - tabHeight)!);
+                if (startDef) {
+                    tabExtInput.startExtent = startDef;
+                    tabExtInput.setDistanceExtent(false, tabDistVal);
+                    const tabExtFeat = extrudeFeatures.add(tabExtInput);
+                    if (tabExtFeat && tabExtFeat.bodies.count > 0) {
+                        const toolBodies: adsk.fusion.BRepBody[] = [];
+                        for (let b = 0; b < tabExtFeat.bodies.count; b++) {
+                            const bBody = tabExtFeat.bodies.item(b);
+                            if (bBody) {
+                                toolBodies.push(bBody);
+                            }
+                        }
+                        if (toolBodies.length > 0) {
+                            joinBodies(rootComp, coverBody, toolBodies);
+                        }
+                    }
+                }
             }
         }
     }
 
     // =========================================================================
-    // TEIL D: Ergonomische Finger-Mulden (Vertiefungen zum Greifen & Drehen)
+    // TEIL D: Durchgehende Fingerlöcher (100% durch die Abdeckplatte zum Greifen & Drehen)
     // =========================================================================
     const gripSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
     if (gripSketch) {
@@ -1305,7 +1379,7 @@ function createBottomCoverPlate(rootComp: adsk.fusion.Component, params: Params)
                     }
                 }
                 const gripCutInput = extrudeFeatures.createInput(gripProfColl, adsk.fusion.FeatureOperations.CutFeatureOperation);
-                const gripDepthVal = adsk.core.ValueInput.createByString('finger_grip_depth');
+                const gripDepthVal = adsk.core.ValueInput.createByString('cover_plate_thickness');
                 if (gripCutInput && gripDepthVal) {
                     gripCutInput.setDistanceExtent(false, gripDepthVal);
                     extrudeFeatures.add(gripCutInput);
