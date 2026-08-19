@@ -102,7 +102,7 @@ function setupParameters(design: adsk.fusion.Design) {
     return {
         basePlateDiameter: getOrCreateParam('base_plate_diameter', '160mm', 'mm', 'Durchmesser der runden Basis-Platte'),
         basePlateHeight: getOrCreateParam('base_plate_height', '10mm', 'mm', 'Höhe der runden Basis-Platte'),
-        basePlateRounding: getOrCreateParam('base_plate_rounding', '3mm', 'mm', 'Abrundung der oberen Basis-Platte-Kante (Kreis)'),
+        basePlateRounding: getOrCreateParam('base_plate_rounding', '2mm', 'mm', 'Abrundung der oberen Basis-Platte-Kante (Kreis)'),
         legOuterDiameter: getOrCreateParam('leg_outer_diameter', '46mm', 'mm', 'Aussendurchmesser der Röhre'),
         ringInnerDiameter: getOrCreateParam('ring_inner_diameter', '40mm', 'mm', 'Aussendurchmesser des oberen Röhrensegments (Stufenabsatz)'),
         ringExtrudeDepth: getOrCreateParam('ring_extrude_depth', '50mm', 'mm', 'Länge des oberen (dünnen) Röhrensegments / Stufenabsatz'),
@@ -114,8 +114,11 @@ function setupParameters(design: adsk.fusion.Design) {
         cableChannelWidth: getOrCreateParam('cable_channel_width', '8mm', 'mm', 'Breite des unterseitigen Kabelkanals'),
         cableChannelDepth: getOrCreateParam('cable_channel_depth', '5.5mm', 'mm', 'Gesamttiefe des unterseitigen Kabelkanals'),
         cableChannelVerticalHeight: getOrCreateParam('cable_channel_vertical_height', '2.5mm', 'mm', 'Höhe des senkrechten Wand-Abschnitts des Kabelkanals'),
+        cableChannelEdgeChamfer: getOrCreateParam('cable_channel_edge_chamfer', '0.8mm', 'mm', 'Abfasung der Kante zwischen senkrechter Wand und 45°-Dach im Kabelkanal'),
         coverPlateDiameter: getOrCreateParam('cover_plate_diameter', '145mm', 'mm', 'Durchmesser der unterseitigen Abdeckplatte (Vertiefung)'),
         coverPlateThickness: getOrCreateParam('cover_plate_thickness', '3mm', 'mm', 'Dicke der unterseitigen Abdeckplatte'),
+        fingerGripDiameter: getOrCreateParam('finger_grip_diameter', '18mm', 'mm', 'Durchmesser der Finger-Vertiefungen zum Drehen der Abdeckplatte'),
+        fingerGripDepth: getOrCreateParam('finger_grip_depth', '1.5mm', 'mm', 'Tiefe der Finger-Vertiefungen an der Unterseite der Abdeckplatte'),
         clampRecessWidth: getOrCreateParam('clamp_recess_width', '22mm', 'mm', 'Breite der Klemmsteg-Vertiefung quer zum Kanal'),
         clampRecessLength: getOrCreateParam('clamp_recess_length', '12mm', 'mm', 'Länge der Klemmsteg-Vertiefung entlang des Kanals'),
         clampRecessDepth: getOrCreateParam('clamp_recess_depth', '2.5mm', 'mm', 'Tiefe der Klemmsteg-Vertiefung an der Unterseite'),
@@ -1027,6 +1030,7 @@ function createBottomCableChannel(rootComp: adsk.fusion.Component, params: Param
     const widthVal = params.cableChannelWidth.value; // cm (0.8cm = 8mm)
     const depthVal = params.cableChannelDepth.value; // cm (0.55cm = 5.5mm)
     const hVertVal = Math.min(params.cableChannelVerticalHeight.value, depthVal - 0.1); // cm (0.25cm = 2.5mm)
+    const chamferVal = Math.min(params.cableChannelEdgeChamfer.value, 0.1); // cm (0.08cm = 0.8mm)
 
     // Pfad-Skizze auf der XY-Ebene: Gerade Linie vom Lochzentrum (legOffsetVal, 0) bis über den Außenrand (outerRadius + 0.5cm)
     const pathSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
@@ -1068,27 +1072,31 @@ function createBottomCableChannel(rootComp: adsk.fusion.Component, params: Param
     }
 
     // Profil im 2D-Skizzenraum der senkrechten Ebene zeichnen:
-    // Senkrechte Wände an der Unterseite (Z: 0 -> hVertVal), danach 45°-Dach (Z: hVertVal -> depthVal)
+    // Senkrechte Wände an der Unterseite (Z: 0 -> hVertVal), abgefastes Eck (Chamfer), danach 45°-Dach (Z: hVertVal -> depthVal)
     const halfW = widthVal / 2.0;
     const roofHeight = depthVal - hVertVal;
     // Bei 45° Neigung verringert sich die halbe Breite am Dach um roofHeight
     const halfWTop = Math.max(0, halfW - roofHeight);
 
     const p1 = adsk.core.Point3D.create(-halfW, 0, 0);
-    const p2 = adsk.core.Point3D.create(-halfW, hVertVal, 0);
-    const p3 = adsk.core.Point3D.create(-halfWTop, depthVal, 0);
-    const p4 = adsk.core.Point3D.create(halfWTop, depthVal, 0);
-    const p5 = adsk.core.Point3D.create(halfW, hVertVal, 0);
-    const p6 = adsk.core.Point3D.create(halfW, 0, 0);
+    const p2 = adsk.core.Point3D.create(-halfW, hVertVal - chamferVal, 0);
+    const p3 = adsk.core.Point3D.create(-halfW + chamferVal, hVertVal + chamferVal, 0);
+    const p4 = adsk.core.Point3D.create(-halfWTop, depthVal, 0);
+    const p5 = adsk.core.Point3D.create(halfWTop, depthVal, 0);
+    const p6 = adsk.core.Point3D.create(halfW - chamferVal, hVertVal + chamferVal, 0);
+    const p7 = adsk.core.Point3D.create(halfW, hVertVal - chamferVal, 0);
+    const p8 = adsk.core.Point3D.create(halfW, 0, 0);
 
-    if (p1 && p2 && p3 && p4 && p5 && p6) {
+    if (p1 && p2 && p3 && p4 && p5 && p6 && p7 && p8) {
         const l = perpSketch.sketchCurves.sketchLines;
         l.addByTwoPoints(p1, p2);
         l.addByTwoPoints(p2, p3);
         l.addByTwoPoints(p3, p4);
         l.addByTwoPoints(p4, p5);
         l.addByTwoPoints(p5, p6);
-        l.addByTwoPoints(p6, p1);
+        l.addByTwoPoints(p6, p7);
+        l.addByTwoPoints(p7, p8);
+        l.addByTwoPoints(p8, p1);
     }
 
     if (perpSketch.profiles.count === 0) {
@@ -1267,6 +1275,41 @@ function createBottomCoverPlate(rootComp: adsk.fusion.Component, params: Params)
             if (plateExtInput && plateDistVal) {
                 plateExtInput.setDistanceExtent(false, plateDistVal);
                 extrudeFeatures.add(plateExtInput);
+            }
+        }
+    }
+
+    // =========================================================================
+    // TEIL D: Ergonomische Finger-Mulden (Vertiefungen zum Greifen & Drehen)
+    // =========================================================================
+    const gripSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
+    if (gripSketch) {
+        const gripRadius = params.fingerGripDiameter.value / 2.0; // cm (0.9cm = 18mm / 2)
+        const gripOffset = coverRadius * 0.55; // Offset vom Mittelpunkt (ca. 4.0cm)
+
+        const gPt1 = adsk.core.Point3D.create(0, gripOffset, 0);
+        const gPt2 = adsk.core.Point3D.create(0, -gripOffset, 0);
+
+        if (gPt1 && gPt2) {
+            gripSketch.sketchCurves.sketchCircles.addByCenterRadius(gPt1, gripRadius);
+            gripSketch.sketchCurves.sketchCircles.addByCenterRadius(gPt2, gripRadius);
+        }
+
+        if (gripSketch.profiles.count > 0) {
+            const gripProfColl = adsk.core.ObjectCollection.create();
+            if (gripProfColl) {
+                for (let i = 0; i < gripSketch.profiles.count; i++) {
+                    const prof = gripSketch.profiles.item(i);
+                    if (prof) {
+                        gripProfColl.add(prof);
+                    }
+                }
+                const gripCutInput = extrudeFeatures.createInput(gripProfColl, adsk.fusion.FeatureOperations.CutFeatureOperation);
+                const gripDepthVal = adsk.core.ValueInput.createByString('finger_grip_depth');
+                if (gripCutInput && gripDepthVal) {
+                    gripCutInput.setDistanceExtent(false, gripDepthVal);
+                    extrudeFeatures.add(gripCutInput);
+                }
             }
         }
     }
