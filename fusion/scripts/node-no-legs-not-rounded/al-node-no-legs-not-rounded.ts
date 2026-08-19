@@ -31,6 +31,9 @@ export function run(_context: string): void {
     // 3. Kugel aus dem Zentrum ausschneiden (Zentralknoten hohl machen)
     cutInnerSphere(rootComp, params.innerBallDiameter);
 
+    // 4. Zentrische Bohrungen in die 4 Arme einbringen (Durchmesser holeDiameter, vom Zentrum bis zum Ende)
+    boreArmHoles(rootComp, targetBody, params);
+
     console.log('Tetrapod-Knoten erfolgreich generiert!');
 
   } catch (e) {
@@ -375,4 +378,153 @@ function cutInnerSphere(
 
   revolveInput.setAngleExtent(false, createValueInput('360 deg'));
   revolveFeatures.add(revolveInput);
+}
+
+/**
+ * Step 4: Bohrt in die 4 Arme jeweils ein Loch mit dem Durchmesser holeDiameter
+ * vom Zentrum (0,0,0) bis zum Ende des Arms (-arm_depth).
+ *
+ * @param rootComp Die Wurzelkomponente des Designs.
+ * @param targetBody Der Tetrapod-Körper.
+ * @param params Die konfigurierten Benutzerparameter.
+ */
+function boreArmHoles(
+  rootComp: adsk.fusion.Component,
+  targetBody: adsk.fusion.BRepBody,
+  params: ReturnType<typeof setupParameters>
+): void {
+  const sketches = rootComp.sketches;
+  const features = rootComp.features;
+  const extrudeFeatures = features.extrudeFeatures;
+  const xyPlane = rootComp.xYConstructionPlane;
+  const center = adsk.core.Point3D.create(0, 0, 0);
+  if (!center) {
+    throw new Error('Konnte Ursprungspunkt Point3D(0,0,0) nicht erzeugen.');
+  }
+
+  // 1. Zylinder-Schneidkörper 0 erzeugen (Arm 0: entlang der -Z-Achse)
+  const sketch0 = sketches.add(xyPlane);
+  if (!sketch0) {
+    throw new Error('Konnte Skizze für Bohrung 0 nicht erzeugen.');
+  }
+  sketch0.sketchCurves.sketchCircles.addByCenterRadius(
+    center,
+    params.holeDiameter.value / 2.0
+  );
+  if (sketch0.profiles.count === 0) {
+    throw new Error('Konnte Profil für Bohrung 0 nicht finden.');
+  }
+  const prof0 = sketch0.profiles.item(0);
+  if (!prof0) {
+    throw new Error('Konnte Profil für Bohrung 0 nicht abrufen.');
+  }
+
+  const extInput0 = extrudeFeatures.createInput(
+    prof0,
+    adsk.fusion.FeatureOperations.NewBodyFeatureOperation
+  );
+  if (!extInput0) {
+    throw new Error('Konnte ExtrudeFeatureInput für Bohrung 0 nicht erzeugen.');
+  }
+  extInput0.setDistanceExtent(false, createValueInput('-arm_depth'));
+  const extFeat0 = extrudeFeatures.add(extInput0);
+  if (!extFeat0 || extFeat0.bodies.count === 0) {
+    throw new Error('Fehler beim Extrudieren des Schneidkörpers für Bohrung 0.');
+  }
+  const hole0Body = extFeat0.bodies.item(0);
+  if (!hole0Body) {
+    throw new Error('Konnte Schneidkörper für Bohrung 0 nicht abrufen.');
+  }
+
+  // 2. Zylinder-Schneidkörper 1 erzeugen (Arm 1: initial entlang -Z, dann rotieren)
+  const sketch1 = sketches.add(xyPlane);
+  if (!sketch1) {
+    throw new Error('Konnte Skizze für Bohrung 1 nicht erzeugen.');
+  }
+  sketch1.sketchCurves.sketchCircles.addByCenterRadius(
+    center,
+    params.holeDiameter.value / 2.0
+  );
+  if (sketch1.profiles.count === 0) {
+    throw new Error('Konnte Profil für Bohrung 1 nicht finden.');
+  }
+  const prof1 = sketch1.profiles.item(0);
+  if (!prof1) {
+    throw new Error('Konnte Profil für Bohrung 1 nicht abrufen.');
+  }
+
+  const extInput1 = extrudeFeatures.createInput(
+    prof1,
+    adsk.fusion.FeatureOperations.NewBodyFeatureOperation
+  );
+  if (!extInput1) {
+    throw new Error('Konnte ExtrudeFeatureInput für Bohrung 1 nicht erzeugen.');
+  }
+  extInput1.setDistanceExtent(false, createValueInput('-arm_depth'));
+  const extFeat1 = extrudeFeatures.add(extInput1);
+  if (!extFeat1 || extFeat1.bodies.count === 0) {
+    throw new Error('Fehler beim Extrudieren des Schneidkörpers für Bohrung 1.');
+  }
+  const hole1Body = extFeat1.bodies.item(0);
+  if (!hole1Body) {
+    throw new Error('Konnte Schneidkörper für Bohrung 1 nicht abrufen.');
+  }
+
+  // Schneidkörper 1 um den Tetraeder-Winkel (109.4712°) um die Y-Achse rotieren
+  const moveFeats = features.moveFeatures;
+  const moveColl = adsk.core.ObjectCollection.create();
+  if (!moveColl) {
+    throw new Error('Konnte ObjectCollection für MoveFeature der Bohrung nicht erzeugen.');
+  }
+  moveColl.add(hole1Body);
+  const moveInput = moveFeats.createInput2(moveColl);
+  if (!moveInput) {
+    throw new Error('Konnte MoveFeatureInput für Bohrung 1 nicht erzeugen.');
+  }
+  const tetraAngle = createValueInput('109.47122063449069deg');
+  moveInput.defineAsRotate(rootComp.yConstructionAxis, tetraAngle);
+  moveFeats.add(moveInput);
+
+  // 3. Kreismuster (Circular Pattern): Schneidkörper 1 dreimal symmetrisch um Z anordnen
+  const circPatterns = features.circularPatternFeatures;
+  const patternColl = adsk.core.ObjectCollection.create();
+  if (!patternColl) {
+    throw new Error('Konnte ObjectCollection für CircularPattern der Bohrungen nicht erzeugen.');
+  }
+  patternColl.add(hole1Body);
+  const patternInput = circPatterns.createInput(patternColl, rootComp.zConstructionAxis);
+  if (!patternInput) {
+    throw new Error('Konnte CircularPatternFeatureInput für Bohrungen nicht erzeugen.');
+  }
+  patternInput.quantity = createValueInput('3');
+  patternInput.totalAngle = createValueInput('360deg');
+  const patternFeat = circPatterns.add(patternInput);
+  if (!patternFeat) {
+    throw new Error('Fehler beim Erstellen des Kreismusters für Bohrungen.');
+  }
+
+  // 4. Alle 4 Schneidkörper sammeln und aus targetBody herausschneiden (Combine Cut)
+  const cutToolBodies = adsk.core.ObjectCollection.create();
+  if (!cutToolBodies) {
+    throw new Error('Konnte ObjectCollection für finale Bohrung-Cut-Operation nicht erzeugen.');
+  }
+  cutToolBodies.add(hole0Body);
+  cutToolBodies.add(hole1Body);
+  for (let i = 0; i < patternFeat.bodies.count; i++) {
+    const b = patternFeat.bodies.item(i);
+    if (b && b.name !== hole1Body.name) {
+      cutToolBodies.add(b);
+    }
+  }
+
+  const combineFeatures = features.combineFeatures;
+  const combineInput = combineFeatures.createInput(targetBody, cutToolBodies);
+  if (!combineInput) {
+    throw new Error('Konnte CombineFeatureInput für Bohrungen nicht erzeugen.');
+  }
+  combineInput.operation = adsk.fusion.FeatureOperations.CutFeatureOperation;
+  const combineFeat = combineFeatures.add(combineInput);
+  if (!combineFeat) {
+    throw new Error('Fehler beim Herausschneiden der 4 Bohrungen aus dem Tetrapod-Körper.');
+  }
 }
