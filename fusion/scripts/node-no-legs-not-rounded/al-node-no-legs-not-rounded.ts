@@ -34,6 +34,9 @@ export function run(_context: string): void {
     // 4. Zentrische Bohrungen in die 4 Arme einbringen (Durchmesser holeDiameter, vom Zentrum bis zum Ende)
     boreArmHoles(rootComp, targetBody, params);
 
+    // 5. Sehnenlängen-Abrundung an den 6 äußeren Schnittkanten anbringen (Radius durch fillet_radius gesteuert)
+    filletOuterArmEdges(rootComp, targetBody, params);
+
     console.log('Tetrapod-Knoten erfolgreich generiert!');
 
   } catch (e) {
@@ -96,7 +99,8 @@ function setupParameters(design: adsk.fusion.Design) {
     ringInnerDiameter: getOrCreateParam('ring_inner_diameter', '40mm', 'mm', 'Durchmesser der erhabenen Stirnflaeche'),
     ringExtrudeDepth: getOrCreateParam('ring_extrude_depth', '22mm', 'mm', 'Tiefe des Rumpfabsatzes / Rücksprungs'),
     holeDiameter: getOrCreateParam('hole_diameter', '31.5mm', 'mm', 'Durchmesser der zentrischen Bohrung'),
-    innerBallDiameter: getOrCreateParam('inner_ball_diameter', '42mm', 'mm', 'Durchmesser des inneren Kugelloches')
+    innerBallDiameter: getOrCreateParam('inner_ball_diameter', '42mm', 'mm', 'Durchmesser des inneren Kugelloches'),
+    filletRadius: getOrCreateParam('fillet_radius', '1mm', 'mm', 'Sehnenlaenge der Kantenabrundung')
   };
 }
 
@@ -526,5 +530,72 @@ function boreArmHoles(
   const combineFeat = combineFeatures.add(combineInput);
   if (!combineFeat) {
     throw new Error('Fehler beim Herausschneiden der 4 Bohrungen aus dem Tetrapod-Körper.');
+  }
+}
+
+/**
+ * Step 5: Rundet die 6 Schnittkanten der äußeren Arm-Zylinder mit einer Sehnenlängen-Abrundung ab.
+ *
+ * @param rootComp Die Wurzelkomponente des Designs.
+ * @param targetBody Der Tetrapod-Körper.
+ * @param params Die konfigurierten Benutzerparameter.
+ */
+function filletOuterArmEdges(
+  rootComp: adsk.fusion.Component,
+  targetBody: adsk.fusion.BRepBody,
+  params: ReturnType<typeof setupParameters>
+): void {
+  const selectedEdges = adsk.core.ObjectCollection.create();
+  if (!selectedEdges) {
+    throw new Error('Konnte ObjectCollection für Fillet-Kanten nicht erzeugen.');
+  }
+
+  const armOuterRadius = params.armOuterDiameter.value / 2.0;
+
+  for (let i = 0; i < targetBody.edges.count; i++) {
+    const edge = targetBody.edges.item(i);
+    if (!edge || edge.faces.count !== 2) continue;
+
+    const f1 = edge.faces.item(0);
+    const f2 = edge.faces.item(1);
+    if (!f1 || !f2) continue;
+
+    const g1 = f1.geometry;
+    const g2 = f2.geometry;
+    if (!g1 || !g2) continue;
+
+    if (
+      g1.surfaceType === adsk.core.SurfaceTypes.CylinderSurfaceType &&
+      g2.surfaceType === adsk.core.SurfaceTypes.CylinderSurfaceType
+    ) {
+      const cyl1 = g1 as adsk.core.Cylinder;
+      const cyl2 = g2 as adsk.core.Cylinder;
+
+      const isCyl1ArmOuter = Math.abs(cyl1.radius - armOuterRadius) < 1e-3;
+      const isCyl2ArmOuter = Math.abs(cyl2.radius - armOuterRadius) < 1e-3;
+
+      // Kante verbinden 2 äußere Armzylinder unterschiedlicher Ausrichtung
+      if (isCyl1ArmOuter && isCyl2ArmOuter && cyl1.axis.angleTo(cyl2.axis) > 0.5) {
+        selectedEdges.add(edge);
+      }
+    }
+  }
+
+  if (selectedEdges.count === 0) {
+    throw new Error('Keine passenden äußeren Schnittkanten für die Abrundung gefunden.');
+  }
+
+  const filletFeatures = rootComp.features.filletFeatures;
+  const filletInput = filletFeatures.createInput();
+  if (!filletInput) {
+    throw new Error('Konnte FilletFeatureInput nicht erzeugen.');
+  }
+
+  const chordLengthInput = createValueInput('fillet_radius');
+  filletInput.edgeSetInputs.addChordLengthEdgeSet(selectedEdges, chordLengthInput, true);
+
+  const filletFeat = filletFeatures.add(filletInput);
+  if (!filletFeat) {
+    throw new Error('Fehler beim Erstellen der Sehnenlängen-Abrundung.');
   }
 }
