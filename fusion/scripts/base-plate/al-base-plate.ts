@@ -52,8 +52,11 @@ export function run(_context: string): void {
         // 9. Unterseite bündig schneiden (Überstand unterhalb z=0 abtrennen)
         trimBottomFlush(rootComp, params);
 
-        // 10. Gebogener Kabelkanal an der Unterseite mit Zugsicherung
+        // 10. Gerader Kabelkanal an der Unterseite (senkrechte Wände + 45° Dach)
         createBottomCableChannel(rootComp, params);
+
+        // 11. Zweite Unterplatte (Abdeckung) mit unsichtbarem Bajonett-Verschluss
+        createBottomCoverPlate(rootComp, params);
 
         console.log('Erfolgreich generiert!');
 
@@ -108,8 +111,11 @@ function setupParameters(design: adsk.fusion.Design) {
         legAngle: getOrCreateParam('leg_angle', '120', 'degree', 'Winkel des Beines zur XY-Ebene (Innenwinkel an der Platte)'),
         legOffset: getOrCreateParam('leg_offset', '45mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
         legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante: Bein und Platte (wird bei Solver-Problemen automatisch verkleinert)'),
-        cableChannelWidth: getOrCreateParam('cable_channel_width', '7.5mm', 'mm', 'Breite des unterseitigen Kabelkanals'),
-        cableChannelDepth: getOrCreateParam('cable_channel_depth', '5mm', 'mm', 'Tiefe des unterseitigen Kabelkanals'),
+        cableChannelWidth: getOrCreateParam('cable_channel_width', '8mm', 'mm', 'Breite des unterseitigen Kabelkanals'),
+        cableChannelDepth: getOrCreateParam('cable_channel_depth', '5.5mm', 'mm', 'Gesamttiefe des unterseitigen Kabelkanals'),
+        cableChannelVerticalHeight: getOrCreateParam('cable_channel_vertical_height', '2.5mm', 'mm', 'Höhe des senkrechten Wand-Abschnitts des Kabelkanals'),
+        coverPlateDiameter: getOrCreateParam('cover_plate_diameter', '145mm', 'mm', 'Durchmesser der unterseitigen Abdeckplatte (Vertiefung)'),
+        coverPlateThickness: getOrCreateParam('cover_plate_thickness', '3mm', 'mm', 'Dicke der unterseitigen Abdeckplatte'),
         clampRecessWidth: getOrCreateParam('clamp_recess_width', '22mm', 'mm', 'Breite der Klemmsteg-Vertiefung quer zum Kanal'),
         clampRecessLength: getOrCreateParam('clamp_recess_length', '12mm', 'mm', 'Länge der Klemmsteg-Vertiefung entlang des Kanals'),
         clampRecessDepth: getOrCreateParam('clamp_recess_depth', '2.5mm', 'mm', 'Tiefe der Klemmsteg-Vertiefung an der Unterseite'),
@@ -1007,11 +1013,10 @@ function trimBottomFlush(rootComp: adsk.fusion.Component, params: Params): void 
 }
 
 /**
- * 10) Gebogener Kabelkanal an der Unterseite der Basis-Platte mit 45°-Wänden und bündiger Kabelklemme:
- *     - Der Kabelkanal folgt einer geschwungenen 8-Punkt-Spline vom Beinloch-Zentrum zum Außenrand.
- *     - Die Kanalwände verlaufen im 45°-Winkel nach oben (Trapez-/V-Profil) für supportfreien 3D-Druck.
- *     - Eine rechtwinklig ausgerichtete Klemmtasche (22mm x 12mm x 2.5mm) mit zwei M3-Schraublöchern
- *       ermöglicht das Fixieren einer gedruckten Kabelbrücke bündig mit der Unterseite.
+ * 10) Gerader Kabelkanal an der Unterseite der Basis-Platte:
+ *     - Verläuft geradlinig vom Zentrum des Beinlochs (legOffset, 0) direkt zur Außenwand.
+ *     - Profil: Zuerst senkrechte Wände nach oben (cableChannelVerticalHeight), danach 45°-Dachneigung.
+ *       Dies sorgt für maximale Kabelhöhe und 100% supportfreien 3D-Druck des Dachbereichs.
  */
 function createBottomCableChannel(rootComp: adsk.fusion.Component, params: Params): void {
     const extrudeFeatures = rootComp.features.extrudeFeatures;
@@ -1020,257 +1025,248 @@ function createBottomCableChannel(rootComp: adsk.fusion.Component, params: Param
     const outerRadius = params.basePlateDiameter.value / 2.0; // cm
     const legOffsetVal = params.legOffset.value; // cm
     const widthVal = params.cableChannelWidth.value; // cm (0.8cm = 8mm)
-    const depthVal = params.cableChannelDepth.value; // cm (0.45cm = 4.5mm)
-    const recessWidth = params.clampRecessWidth.value; // cm (2.2cm)
-    const recessLength = params.clampRecessLength.value; // cm (1.2cm)
-    const recessDepth = params.clampRecessDepth.value; // cm (0.25cm)
-    const screwDiameter = params.strainReliefScrewDiameter.value; // cm (0.26cm)
-    const screwDepth = params.strainReliefScrewDepth.value; // cm (0.6cm)
+    const depthVal = params.cableChannelDepth.value; // cm (0.55cm = 5.5mm)
+    const hVertVal = Math.min(params.cableChannelVerticalHeight.value, depthVal - 0.1); // cm (0.25cm = 2.5mm)
 
-    // =========================================================================
-    // SCHRITT 1: Spline-Pfad auf der XY-Ebene (Z = 0) skizzieren
-    // =========================================================================
+    // Pfad-Skizze auf der XY-Ebene: Gerade Linie vom Lochzentrum (legOffsetVal, 0) bis über den Außenrand (outerRadius + 0.5cm)
     const pathSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
     if (!pathSketch) {
         throw new Error('Skizze für den Kabelkanal-Pfad konnte nicht erstellt werden.');
     }
 
-    // Passpunkte der Spline relativ zum Bein-Offset (cx) und Außenradius (R)
-    const cx = legOffsetVal;
-    const R = outerRadius;
-
-    // S-förmige Kurve vom Beinloch zum Außenrand (gemäß Vorlage-Bild)
-    const fitPtCoords = [
-        { x: cx, y: 0.0 },               // P0: Zentrum Beinloch
-        { x: cx - 0.5, y: 1.0 },         // P1: Austritt aus Beinloch
-        { x: cx - 1.2, y: 2.6 },         // P2: Bögen oberhalb des Lochs
-        { x: cx, y: 3.9 },               // P3: Scheitelpunkt
-        { x: cx + 1.3, y: 3.5 },         // P4: Absteigender Ast (Position Kabelklemme)
-        { x: cx + 2.1, y: 2.2 },         // P5: Übergang zum Außenrand
-        { x: R - 0.4, y: 1.2 },          // P6: Vor dem Außenrand
-        { x: R + 0.6, y: 0.6 }           // P7: Austritt über den Rand hinaus
-    ];
-
-    const fitPtColl = adsk.core.ObjectCollection.create();
-    if (!fitPtColl) {
-        throw new Error('ObjectCollection für Spline-Punkte konnte nicht erstellt werden.');
-    }
-    for (const pt of fitPtCoords) {
-        const p3d = adsk.core.Point3D.create(pt.x, pt.y, 0);
-        if (p3d) {
-            fitPtColl.add(p3d);
-        }
+    const pStart = adsk.core.Point3D.create(legOffsetVal, 0, 0);
+    const pEnd = adsk.core.Point3D.create(outerRadius + 0.5, 0, 0);
+    if (!pStart || !pEnd) {
+        throw new Error('Start-/Endpunkt für den geraden Kabelkanal konnten nicht erstellt werden.');
     }
 
-    const spline = pathSketch.sketchCurves.sketchFittedSplines.add(fitPtColl);
-    if (!spline) {
-        throw new Error('Kabelkanal-Spline konnte nicht erstellt werden.');
+    const pathLine = pathSketch.sketchCurves.sketchLines.addByTwoPoints(pStart, pEnd);
+    if (!pathLine) {
+        throw new Error('Gerade Pfadlinie für Kabelkanal konnte nicht erstellt werden.');
     }
 
-    // =========================================================================
-    // SCHRITT 2: 45°-Kanalwände per Sweep oder extrudierter Taper-Cut erzeugen
-    // =========================================================================
-    const path = rootComp.features.createPath(spline);
+    const path = rootComp.features.createPath(pathLine);
     if (!path) {
-        throw new Error('Pfad aus Kabelkanal-Spline konnte nicht erstellt werden.');
-    }
-    let channelCreated = false;
-
-    // Strategie A: Sweep-Profil rechtwinklig zum Pfad (45° Trapezoid)
-    try {
-        const planes = rootComp.constructionPlanes;
-        const planeInput = planes.createInput();
-        if (planeInput && planeInput.setByDistanceOnPath(spline, adsk.core.ValueInput.createByReal(0.0)!)) {
-            const perpPlane = planes.add(planeInput);
-            if (perpPlane) {
-                const perpSketch = rootComp.sketches.add(perpPlane);
-                if (perpSketch) {
-                    const halfWBottom = widthVal / 2.0;
-                    // Bei 45°-Wand steigt Z um dx an -> w_top = w_bottom - 2 * depth
-                    const wTop = Math.max(0, widthVal - 2.0 * depthVal);
-                    const halfWTop = wTop / 2.0;
-
-                    const l = perpSketch.sketchCurves.sketchLines;
-                    if (wTop > 0.001) {
-                        // Trapez-Profil
-                        const pA = adsk.core.Point3D.create(-halfWBottom, 0, 0);
-                        const pB = adsk.core.Point3D.create(-halfWTop, depthVal, 0);
-                        const pC = adsk.core.Point3D.create(halfWTop, depthVal, 0);
-                        const pD = adsk.core.Point3D.create(halfWBottom, 0, 0);
-                        if (pA && pB && pC && pD) {
-                            l.addByTwoPoints(pA, pB);
-                            l.addByTwoPoints(pB, pC);
-                            l.addByTwoPoints(pC, pD);
-                            l.addByTwoPoints(pD, pA);
-                        }
-                    } else {
-                        // Dreieck / V-Nut (45° Spitze)
-                        const hV = halfWBottom;
-                        const pA = adsk.core.Point3D.create(-halfWBottom, 0, 0);
-                        const pB = adsk.core.Point3D.create(0, Math.min(depthVal, hV), 0);
-                        const pC = adsk.core.Point3D.create(halfWBottom, 0, 0);
-                        if (pA && pB && pC) {
-                            l.addByTwoPoints(pA, pB);
-                            l.addByTwoPoints(pB, pC);
-                            l.addByTwoPoints(pC, pA);
-                        }
-                    }
-
-                    if (perpSketch.profiles.count > 0) {
-                        const prof = perpSketch.profiles.item(0);
-                        if (prof) {
-                            const sweepInput = sweepFeatures.createInput(prof, path, adsk.fusion.FeatureOperations.CutFeatureOperation);
-                            if (sweepInput) {
-                                const sweepFeat = sweepFeatures.add(sweepInput);
-                                if (sweepFeat) {
-                                    channelCreated = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    } catch (_err) {
-        // Fallback B wird unten ausgeführt
+        throw new Error('Pfad aus Kabelkanal-Gerade konnte nicht erstellt werden.');
     }
 
-    // Strategie B (Fallback): Sweep einer Rechtecknut mit taperAngle = -45°
-    if (!channelCreated) {
-        try {
-            const planes = rootComp.constructionPlanes;
-            const planeInput = planes.createInput();
-            if (planeInput && planeInput.setByDistanceOnPath(spline, adsk.core.ValueInput.createByReal(0.0)!)) {
-                const perpPlane = planes.add(planeInput);
-                if (perpPlane) {
-                    const perpSketch = rootComp.sketches.add(perpPlane);
-                    if (perpSketch) {
-                        const halfW = widthVal / 2.0;
-                        const pA = adsk.core.Point3D.create(-halfW, 0, 0);
-                        const pB = adsk.core.Point3D.create(-halfW, depthVal, 0);
-                        const pC = adsk.core.Point3D.create(halfW, depthVal, 0);
-                        const pD = adsk.core.Point3D.create(halfW, 0, 0);
-                        if (pA && pB && pC && pD) {
-                            const l = perpSketch.sketchCurves.sketchLines;
-                            l.addByTwoPoints(pA, pB);
-                            l.addByTwoPoints(pB, pC);
-                            l.addByTwoPoints(pC, pD);
-                            l.addByTwoPoints(pD, pA);
-                        }
-
-                        if (perpSketch.profiles.count > 0) {
-                            const prof = perpSketch.profiles.item(0);
-                            if (prof) {
-                                const sweepInput = sweepFeatures.createInput(prof, path, adsk.fusion.FeatureOperations.CutFeatureOperation);
-                                if (sweepInput) {
-                                    sweepInput.taperAngle = adsk.core.ValueInput.createByString('-45 deg')!;
-                                    const sweepFeat = sweepFeatures.add(sweepInput);
-                                    if (sweepFeat) {
-                                        channelCreated = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (_err) {
-            // Ignorieren
-        }
+    // Konstruktionsebene rechtwinklig zur Pfadlinie am Startpunkt (distance = 0.0)
+    const planes = rootComp.constructionPlanes;
+    const planeInput = planes.createInput();
+    if (!planeInput || !planeInput.setByDistanceOnPath(pathLine, adsk.core.ValueInput.createByReal(0.0)!)) {
+        throw new Error('Konstruktionsebene für Kanalprofil konnte nicht initialisiert werden.');
     }
 
-    if (!channelCreated) {
-        throw new Error('Kabelkanal-Cut konnte weder per 45°-Profil noch per Taper-Sweep erstellt werden.');
+    const perpPlane = planes.add(planeInput);
+    if (!perpPlane) {
+        throw new Error('Senkrechte Konstruktionsebene für Kabelkanal-Profil konnte nicht erstellt werden.');
+    }
+
+    const perpSketch = rootComp.sketches.add(perpPlane);
+    if (!perpSketch) {
+        throw new Error('Skizze auf senkrechter Ebene für Kabelkanal konnte nicht erstellt werden.');
+    }
+
+    // Profil im 2D-Skizzenraum der senkrechten Ebene zeichnen:
+    // Senkrechte Wände an der Unterseite (Z: 0 -> hVertVal), danach 45°-Dach (Z: hVertVal -> depthVal)
+    const halfW = widthVal / 2.0;
+    const roofHeight = depthVal - hVertVal;
+    // Bei 45° Neigung verringert sich die halbe Breite am Dach um roofHeight
+    const halfWTop = Math.max(0, halfW - roofHeight);
+
+    const p1 = adsk.core.Point3D.create(-halfW, 0, 0);
+    const p2 = adsk.core.Point3D.create(-halfW, hVertVal, 0);
+    const p3 = adsk.core.Point3D.create(-halfWTop, depthVal, 0);
+    const p4 = adsk.core.Point3D.create(halfWTop, depthVal, 0);
+    const p5 = adsk.core.Point3D.create(halfW, hVertVal, 0);
+    const p6 = adsk.core.Point3D.create(halfW, 0, 0);
+
+    if (p1 && p2 && p3 && p4 && p5 && p6) {
+        const l = perpSketch.sketchCurves.sketchLines;
+        l.addByTwoPoints(p1, p2);
+        l.addByTwoPoints(p2, p3);
+        l.addByTwoPoints(p3, p4);
+        l.addByTwoPoints(p4, p5);
+        l.addByTwoPoints(p5, p6);
+        l.addByTwoPoints(p6, p1);
+    }
+
+    if (perpSketch.profiles.count === 0) {
+        throw new Error('Profil für den geraden Kabelkanal nicht gefunden.');
+    }
+    const profile = perpSketch.profiles.item(0);
+    if (!profile) {
+        throw new Error('Profil des geraden Kabelkanals konnte nicht gelesen werden.');
+    }
+
+    const sweepInput = sweepFeatures.createInput(profile, path, adsk.fusion.FeatureOperations.CutFeatureOperation);
+    if (!sweepInput) {
+        throw new Error('Sweep-Input für Kabelkanal konnte nicht erstellt werden.');
+    }
+
+    const sweepFeat = sweepFeatures.add(sweepInput);
+    if (!sweepFeat) {
+        throw new Error('Kabelkanal konnte nicht extrudiert/gesweept werden.');
+    }
+}
+
+/**
+ * 11) Zweite Unterplatte (Abdeckung) & unsichtbarer Bajonett-Verschluss:
+ *     - An der Unterseite der Hauptplatte wird eine kreisförmige Vertiefung
+ *       (coverPlateDiameter, Tiefe coverPlateThickness) eingeschnitten.
+ *     - Am Innenrand der Vertiefung werden 4 L-förmige Bajonett-Nuten eingebracht.
+ *     - Ein zweiter separater BRep-Körper (Abdeckplatte) wird bündig in der Vertiefung generiert
+ *       mit 4 passenden radialen Rastnasen.
+ *     - Ein leichtes Drehen (15°) verriegelt die Unterplatte unsichtbar und werkzeuglos in der Hauptplatte.
+ */
+function createBottomCoverPlate(rootComp: adsk.fusion.Component, params: Params): void {
+    const extrudeFeatures = rootComp.features.extrudeFeatures;
+
+    const coverRadius = params.coverPlateDiameter.value / 2.0; // cm (z.B. 7.25cm = 145mm / 2)
+    const coverThickness = params.coverPlateThickness.value; // cm (z.B. 0.3cm = 3mm)
+    const center = adsk.core.Point3D.create(0, 0, 0);
+    if (!center) {
+        throw new Error('Mittelpunkt für Unterplatte konnte nicht erstellt werden.');
     }
 
     // =========================================================================
-    // SCHRITT 3: Bündige Kabelklemme (Klemmtasche & M3-Schraublöcher)
+    // TEIL A: Kreisförmige Vertiefung an der Unterseite der Hauptplatte (Z = 0)
     // =========================================================================
-    // Position der Kabelklemme am Punkt P4 = (cx + 1.3, 3.5)
-    const clampCenter = adsk.core.Point3D.create(cx + 1.3, 3.5, 0);
-    if (!clampCenter) {
-        throw new Error('Mittelpunkt für Kabelklemme konnte nicht erstellt werden.');
-    }
-
-    // Tangentenvektor der Kurve bei P4 (aus Nachbarpunkten P3 (cx, 3.9) und P5 (cx + 2.1, 2.2))
-    const tanX = (cx + 2.1) - cx; // 2.1
-    const tanY = 2.2 - 3.9;       // -1.7
-    const tanLen = Math.sqrt(tanX * tanX + tanY * tanY);
-    const tx = tanX / tanLen;
-    const ty = tanY / tanLen;
-
-    // Normalenvektor rechtwinklig zum Kanal
-    const nx = -ty;
-    const ny = tx;
-
-    // Klemmtasche (22mm x 12mm) skizzieren
     const recessSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
     if (!recessSketch) {
-        throw new Error('Skizze für Kabelklemmen-Vertiefung konnte nicht erstellt werden.');
+        throw new Error('Skizze für Unterplatten-Vertiefung konnte nicht erstellt werden.');
+    }
+    recessSketch.sketchCurves.sketchCircles.addByCenterRadius(center, coverRadius);
+
+    if (recessSketch.profiles.count === 0) {
+        throw new Error('Profil für Unterplatten-Vertiefung nicht gefunden.');
+    }
+    const recessProfile = recessSketch.profiles.item(0);
+    if (!recessProfile) {
+        throw new Error('Profil für Unterplatten-Vertiefung konnte nicht gelesen werden.');
     }
 
-    const halfL = recessLength / 2.0; // entlang des Kanals (tx, ty)
-    const halfW = recessWidth / 2.0;  // quer zum Kanal (nx, ny)
+    const recessCutInput = extrudeFeatures.createInput(recessProfile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+    const depthVal = adsk.core.ValueInput.createByString('cover_plate_thickness');
+    if (!recessCutInput || !depthVal) {
+        throw new Error('Cut-Input für Unterplatten-Vertiefung konnte nicht initialisiert werden.');
+    }
+    recessCutInput.setDistanceExtent(false, depthVal);
+    extrudeFeatures.add(recessCutInput);
 
-    const cX = clampCenter.x;
-    const cY = clampCenter.y;
+    // =========================================================================
+    // TEIL B: 4 unsichtbare L-förmige Bajonett-Nuten an der Innenwand der Vertiefung
+    // =========================================================================
+    const numTabs = 4;
+    const tabWidthAngle = Math.PI / 18; // ~10 Grad Breite der Eintrete-Nut
+    const twistAngle = Math.PI / 12;    // ~15 Grad Drehwinkel im Bajonett
+    const tabHeight = coverThickness * 0.4; // 1.2mm Höhe der Verriegelungs-Nut
+    const tabDepth = 0.15; // 1.5mm Tiefe der Nut im Rand
 
-    const corner1 = adsk.core.Point3D.create(cX + halfL * tx + halfW * nx, cY + halfL * ty + halfW * ny, 0);
-    const corner2 = adsk.core.Point3D.create(cX - halfL * tx + halfW * nx, cY - halfL * ty + halfW * ny, 0);
-    const corner3 = adsk.core.Point3D.create(cX - halfL * tx - halfW * nx, cY - halfL * ty - halfW * ny, 0);
-    const corner4 = adsk.core.Point3D.create(cX + halfL * tx - halfW * nx, cY + halfL * ty - halfW * ny, 0);
-
-    if (corner1 && corner2 && corner3 && corner4) {
-        const l = recessSketch.sketchCurves.sketchLines;
-        l.addByTwoPoints(corner1, corner2);
-        l.addByTwoPoints(corner2, corner3);
-        l.addByTwoPoints(corner3, corner4);
-        l.addByTwoPoints(corner4, corner1);
+    const slotSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
+    if (!slotSketch) {
+        throw new Error('Skizze für Bajonett-Nuten konnte nicht erstellt werden.');
     }
 
-    if (recessSketch.profiles.count > 0) {
-        const recessProf = recessSketch.profiles.item(0);
-        if (recessProf) {
-            const recessCutInput = extrudeFeatures.createInput(recessProf, adsk.fusion.FeatureOperations.CutFeatureOperation);
-            const recessDistVal = adsk.core.ValueInput.createByString('clamp_recess_depth');
-            if (recessCutInput && recessDistVal) {
-                recessCutInput.setDistanceExtent(false, recessDistVal);
-                extrudeFeatures.add(recessCutInput);
+    // Skizziere die 4 Eintrete- und Verriegelungs-Sektoren für die Hauptplatte
+    for (let i = 0; i < numTabs; i++) {
+        const baseAngle = (i * 2.0 * Math.PI) / numTabs;
+        const a1 = baseAngle - tabWidthAngle / 2.0;
+        const a2 = baseAngle + tabWidthAngle / 2.0 + twistAngle;
+
+        const rIn = coverRadius;
+        const rOut = coverRadius + tabDepth;
+
+        // Bogenaußen- und Innenpunkte für das L-förmige Nutensegment
+        const pIn1 = adsk.core.Point3D.create(rIn * Math.cos(a1), rIn * Math.sin(a1), 0);
+        const pOut1 = adsk.core.Point3D.create(rOut * Math.cos(a1), rOut * Math.sin(a1), 0);
+        const pOut2 = adsk.core.Point3D.create(rOut * Math.cos(a2), rOut * Math.sin(a2), 0);
+        const pIn2 = adsk.core.Point3D.create(rIn * Math.cos(a2), rIn * Math.sin(a2), 0);
+
+        if (pIn1 && pOut1 && pOut2 && pIn2) {
+            const l = slotSketch.sketchCurves.sketchLines;
+            l.addByTwoPoints(pIn1, pOut1);
+            l.addByTwoPoints(pOut1, pOut2);
+            l.addByTwoPoints(pOut2, pIn2);
+            l.addByTwoPoints(pIn2, pIn1);
+        }
+    }
+
+    if (slotSketch.profiles.count > 0) {
+        const slotProfColl = adsk.core.ObjectCollection.create();
+        if (slotProfColl) {
+            for (let i = 0; i < slotSketch.profiles.count; i++) {
+                const prof = slotSketch.profiles.item(i);
+                if (prof) {
+                    slotProfColl.add(prof);
+                }
+            }
+            const slotCutInput = extrudeFeatures.createInput(slotProfColl, adsk.fusion.FeatureOperations.CutFeatureOperation);
+            const slotDist = adsk.core.ValueInput.createByReal(tabHeight);
+            if (slotCutInput && slotDist) {
+                // Cut im oberen Bereich der Vertiefung (z = coverThickness - tabHeight bis coverThickness)
+                const startDef = adsk.fusion.OffsetStartDefinition.create(adsk.core.ValueInput.createByReal(coverThickness - tabHeight)!);
+                if (startDef) {
+                    slotCutInput.startExtent = startDef;
+                    slotCutInput.setDistanceExtent(false, slotDist);
+                    extrudeFeatures.add(slotCutInput);
+                }
             }
         }
     }
 
-    // M3-Schraublöcher für die Klemmbrücke (seitlich versetzt um ±0.65cm)
-    const screwSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
-    if (!screwSketch) {
-        throw new Error('Skizze für Zugsicherungs-Bohrungen konnte nicht erstellt werden.');
+    // =========================================================================
+    // TEIL C: Zweite Unterplatte (separater BRepBody) mit 4 Bajonett-Rastnasen
+    // =========================================================================
+    const clearance = 0.02; // 0.2mm Drucktoleranz
+    const plateRadius = coverRadius - clearance;
+
+    const plateSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
+    if (!plateSketch) {
+        throw new Error('Skizze für zweite Unterplatte konnte nicht erstellt werden.');
     }
 
-    const screwRadius = screwDiameter / 2.0;
-    const screwOffset = 0.65; // cm (6.5mm seitlich)
+    // Hauptkreis der Abdeckplatte
+    plateSketch.sketchCurves.sketchCircles.addByCenterRadius(center, plateRadius);
 
-    const screw1Pt = adsk.core.Point3D.create(cX + screwOffset * nx, cY + screwOffset * ny, 0);
-    const screw2Pt = adsk.core.Point3D.create(cX - screwOffset * nx, cY - screwOffset * ny, 0);
+    // 4 radiale Bajonett-Rastnasen am Umfang skizzieren
+    for (let i = 0; i < numTabs; i++) {
+        const baseAngle = (i * 2.0 * Math.PI) / numTabs;
+        const a1 = baseAngle - (tabWidthAngle * 0.8) / 2.0;
+        const a2 = baseAngle + (tabWidthAngle * 0.8) / 2.0;
 
-    if (screw1Pt && screw2Pt) {
-        screwSketch.sketchCurves.sketchCircles.addByCenterRadius(screw1Pt, screwRadius);
-        screwSketch.sketchCurves.sketchCircles.addByCenterRadius(screw2Pt, screwRadius);
+        const rIn = plateRadius - 0.1;
+        const rOut = coverRadius + tabDepth - clearance;
+
+        const p1 = adsk.core.Point3D.create(rIn * Math.cos(a1), rIn * Math.sin(a1), 0);
+        const p2 = adsk.core.Point3D.create(rOut * Math.cos(a1), rOut * Math.sin(a1), 0);
+        const p3 = adsk.core.Point3D.create(rOut * Math.cos(a2), rOut * Math.sin(a2), 0);
+        const p4 = adsk.core.Point3D.create(rIn * Math.cos(a2), rIn * Math.sin(a2), 0);
+
+        if (p1 && p2 && p3 && p4) {
+            const l = plateSketch.sketchCurves.sketchLines;
+            l.addByTwoPoints(p1, p2);
+            l.addByTwoPoints(p2, p3);
+            l.addByTwoPoints(p3, p4);
+            l.addByTwoPoints(p4, p1);
+        }
     }
 
-    if (screwSketch.profiles.count > 0) {
-        const screwProfColl = adsk.core.ObjectCollection.create();
-        if (screwProfColl) {
-            for (let i = 0; i < screwSketch.profiles.count; i++) {
-                const prof = screwSketch.profiles.item(i);
+    if (plateSketch.profiles.count > 0) {
+        const plateProfColl = adsk.core.ObjectCollection.create();
+        if (plateProfColl) {
+            for (let i = 0; i < plateSketch.profiles.count; i++) {
+                const prof = plateSketch.profiles.item(i);
                 if (prof) {
-                    screwProfColl.add(prof);
+                    plateProfColl.add(prof);
                 }
             }
-            const screwCutInput = extrudeFeatures.createInput(screwProfColl, adsk.fusion.FeatureOperations.CutFeatureOperation);
-            const screwDepthDist = adsk.core.ValueInput.createByString('strain_relief_screw_depth');
-            if (screwCutInput && screwDepthDist) {
-                screwCutInput.setDistanceExtent(false, screwDepthDist);
-                extrudeFeatures.add(screwCutInput);
+            // Extrudiere als NEUEN KÖRPER (NewBodyFeatureOperation), damit Platte 1 und 2 getrennt bleiben!
+            const plateExtInput = extrudeFeatures.createInput(plateProfColl, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+            const plateDistVal = adsk.core.ValueInput.createByString('cover_plate_thickness');
+            if (plateExtInput && plateDistVal) {
+                plateExtInput.setDistanceExtent(false, plateDistVal);
+                extrudeFeatures.add(plateExtInput);
             }
         }
     }
