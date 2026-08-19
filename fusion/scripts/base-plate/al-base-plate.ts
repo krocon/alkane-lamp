@@ -1205,8 +1205,9 @@ function createBottomCoverPlate(rootComp: adsk.fusion.Component, params: Params)
     const numTabs = 4;
     const tabWidthAngle = Math.PI / 18; // ~10 Grad Breite der Eintrete-Nut
     const twistAngle = Math.PI / 12;    // ~15 Grad Drehwinkel im Bajonett
-    const tabHeight = coverThickness * 0.4; // 1.2mm Höhe der Verriegelungs-Nut
-    const tabDepth = 0.15; // 1.5mm Tiefe der Nut im Rand
+    const grooveHeight = 0.125; // 1.25mm Höhe der Nut im Hauptkörper (inkl. Z-Spiel)
+    const tabHeight = 0.110;    // 1.10mm Höhe der Rastnase am Deckel (0.15mm vertikales Spiel)
+    const tabDepth = 0.15;      // 1.5mm Tiefe der Nut im Rand
 
     // TEIL B.1: Vertikale Eintrete-Nuten (Entry Slots: Z = 0 bis Z = coverThickness)
     const entrySketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
@@ -1237,7 +1238,7 @@ function createBottomCoverPlate(rootComp: adsk.fusion.Component, params: Params)
         }
     }
 
-    // TEIL B.2: Horizontale Verriegelungs-Nuten (Locking Grooves: Z = coverThickness - tabHeight bis Z = coverThickness)
+    // TEIL B.2: Horizontale Verriegelungs-Nuten (Locking Grooves: Z = coverThickness - grooveHeight bis Z = coverThickness)
     const slotSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
     if (!slotSketch) {
         throw new Error('Skizze für Bajonett-Verriegelungsnuten konnte nicht erstellt werden.');
@@ -1260,9 +1261,9 @@ function createBottomCoverPlate(rootComp: adsk.fusion.Component, params: Params)
                 }
             }
             const slotCutInput = extrudeFeatures.createInput(slotProfColl, adsk.fusion.FeatureOperations.CutFeatureOperation);
-            const slotDist = adsk.core.ValueInput.createByReal(tabHeight);
+            const slotDist = adsk.core.ValueInput.createByReal(grooveHeight);
             if (slotCutInput && slotDist) {
-                const startDef = adsk.fusion.OffsetStartDefinition.create(adsk.core.ValueInput.createByReal(coverThickness - tabHeight)!);
+                const startDef = adsk.fusion.OffsetStartDefinition.create(adsk.core.ValueInput.createByReal(coverThickness - grooveHeight)!);
                 if (startDef) {
                     slotCutInput.startExtent = startDef;
                     slotCutInput.setDistanceExtent(false, slotDist);
@@ -1275,7 +1276,7 @@ function createBottomCoverPlate(rootComp: adsk.fusion.Component, params: Params)
     // =========================================================================
     // TEIL C: Zweite Unterplatte (separater BRepBody) mit 4 Bajonett-Rastnasen
     // =========================================================================
-    const clearance = 0.02; // 0.2mm Drucktoleranz
+    const clearance = 0.03; // 0.3mm radiales Spiel (0.6mm Durchmesser-Toleranz für PLA/P2S)
     const plateRadius = coverRadius - clearance;
 
     // TEIL C.1: Haupt-Kreisscheibe der Abdeckplatte (Z = 0 bis Z = coverThickness)
@@ -1304,6 +1305,12 @@ function createBottomCoverPlate(rootComp: adsk.fusion.Component, params: Params)
         throw new Error('Grundscheibe der Abdeckplatte konnte nicht extrudiert werden.');
     }
     const coverBody = plateExtFeat.bodies.item(0)!;
+
+    // Entgratung / Fase an der Unterkante (Z = 0) der Abdeckplatte gegen Elefantenfuß-Klemmen
+    const bottomEdge = findCircularEdgeAtZ(coverBody, 0, plateRadius);
+    if (bottomEdge) {
+        applyConstantRadiusFillet(rootComp, [bottomEdge], '0.5mm');
+    }
 
     // TEIL C.2: 4 radiale Rastnasen an der Abdeckplatte (nur im oberen Bereich Z = coverThickness - tabHeight bis coverThickness)
     const tabSketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
