@@ -22,15 +22,18 @@ export function run(_context: string): void {
     // 1. Parameter definieren
     const params = setupParameters(design);
 
-    // 2. Ersten Tetrapod (Node 1) im Ursprung (0,0,0) erzeugen (nur kurze Arme)
-    const targetBody = createTetrapod(rootComp, params);
+    // 2. Ersten Tetrapod (Node 1) im Ursprung (0,0,0) erzeugen (Arm in -Z Richtung ist das Bein)
+    const targetBody = createTetrapod(rootComp, params, true);
     targetBody.name = 'Node_1';
 
     // 3. Kugel aus dem Zentrum von Node 1 ausschneiden (Zentralknoten hohl machen)
     cutInnerSphere(rootComp, params.innerBallDiameter);
 
-    // 4. Zweiten Tetrapod (Node 2) erzeugen (nur kurze Arme)
-    const node2 = createTetrapod(rootComp, params);
+    // 4. Geneigten Fuß (Basis-Platte + Verrundungen + Kabelkanal) an das Bein von Node 1 anfügen
+    createInclinedBasePlateFoot(rootComp, params, targetBody);
+
+    // 5. Zweiten Tetrapod (Node 2) erzeugen (nur kurze Arme)
+    const node2 = createTetrapod(rootComp, params, false);
     node2.name = 'Node_2';
 
     // Kugel aus dem Zentrum von Node 2 ausschneiden
@@ -39,8 +42,8 @@ export function run(_context: string): void {
     // Node 2 positionieren (Zentrum in XZ-Ebene, 8 cm Abstand zu Node 1)
     const center2 = positionSecondTetrapod(rootComp, node2);
 
-    // 5. Dritten Tetrapod (Node 3) erzeugen (nur kurze Arme)
-    const node3 = createTetrapod(rootComp, params);
+    // 6. Dritten Tetrapod (Node 3) erzeugen (nur kurze Arme)
+    const node3 = createTetrapod(rootComp, params, false);
     node3.name = 'Node_3';
 
     // Kugel aus dem Zentrum von Node 3 ausschneiden
@@ -49,7 +52,7 @@ export function run(_context: string): void {
     // Node 3 positionieren (Zentrum in XZ-Ebene, 8 cm Abstand zu Node 2, Achsenverlängerung)
     positionThirdTetrapod(rootComp, node3, center2);
 
-    // 6. Verbindungsröhren (ID 31.5mm, OD 46mm, Länge 8cm) erzeugen und mit den Tetrapoden verschmelzen
+    // 7. Verbindungsröhren (ID 31.5mm, OD 46mm, Länge 45mm mittig) erzeugen und verschmelzen
     createConnectionTube1To2(rootComp, params, targetBody, node2);
     createConnectionTube2To3(rootComp, params, targetBody, node3, center2);
 
@@ -140,7 +143,19 @@ function setupParameters(design: adsk.fusion.Design) {
     ringExtrudeDepth: getOrCreateParam('ring_extrude_depth', '17mm', 'mm', 'Tiefe des Rumpfabsatzes / Rücksprungs'),
     holeDepthOffset: getOrCreateParam('hole_depth_offset', '5mm', 'mm', 'Abstand vom Armende fuer Bohrungstiefe (arm_depth - offset)'),
     holeDiameter: getOrCreateParam('hole_diameter', '31.5mm', 'mm', 'Durchmesser der zentrischen Bohrung'),
-    innerBallDiameter: getOrCreateParam('inner_ball_diameter', '42mm', 'mm', 'Durchmesser des ineren Kugelloches')
+    innerBallDiameter: getOrCreateParam('inner_ball_diameter', '42mm', 'mm', 'Durchmesser des ineren Kugelloches'),
+    // Parameter für den Fuß / Basis-Platte (wie in al-base-plate-simple-cable-hole.ts)
+    basePlateDiameter: getOrCreateParam('base_plate_diameter', '160mm', 'mm', 'Durchmesser der runden Basis-Platte'),
+    basePlateHeight: getOrCreateParam('base_plate_height', '10mm', 'mm', 'Höhe der runden Basis-Platte'),
+    basePlateRounding: getOrCreateParam('base_plate_rounding', '2mm', 'mm', 'Abrundung der oberen Basis-Platte-Kante'),
+    legLength: getOrCreateParam('leg_length', '100mm', 'mm', 'Länge des Beins von Node 1 zur Basis-Platte'),
+    legAngle: getOrCreateParam('leg_angle', '120', 'degree', 'Winkel des Beines zur Basis-Platte (120 deg)'),
+    legOffset: getOrCreateParam('leg_offset', '45mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
+    legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante zwischen Bein und Basis-Platte'),
+    cableHoleOffset: getOrCreateParam('cable_hole_offset', '70mm', 'mm', 'Versatz der Kabelkanal-Konstruktionsebene'),
+    cableHoleDiameter: getOrCreateParam('cable_hole_diameter', '6mm', 'mm', 'Durchmesser des Kabelkanallochs'),
+    cableHoleHeight: getOrCreateParam('cable_hole_height', '4.5mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite'),
+    cableHoleChamfer: getOrCreateParam('cable_hole_chamfer', '0.3mm', 'mm', 'Abfasung der Lochkanten des Kabelkanals')
   };
 }
 
@@ -270,20 +285,25 @@ function createSingleSteppedArm(
 
 /**
  * Orchestriert den Zusammenbau des Tetrapoden.
- * Erzeugt einen langen Arm und drei gestufte Arme, die im tetraedrischen Winkel angeordnet werden.
+ * Erzeugt vier Arme, die im tetraedrischen Winkel angeordnet werden.
  *
  * @param rootComp Die Wurzelkomponente.
  * @param params Die Benutzerparameter.
+ * @param isNode1 Wenn true, wird Arm 0 als langes Z-Bein erzeugt.
  * @returns Der finale, kombinierte Tetrapod-Körper.
  */
 function createTetrapod(
   rootComp: adsk.fusion.Component,
-  params: ReturnType<typeof setupParameters>
+  params: ReturnType<typeof setupParameters>,
+  isNode1: boolean = false
 ): adsk.fusion.BRepBody {
   const features = rootComp.features;
 
-  // Alle 4 Arme als kurze (gestufte) Arme erzeugen (kein langer Arm)
-  const arm0Body = createSingleSteppedArm(rootComp, params);
+  // Arm 0: Für Node 1 als geneigtes Bein (legLength, legAngle), für andere Nodes als kurzer Arm
+  const arm0Body = isNode1
+    ? createInclinedLegForNode1(rootComp, params)
+    : createSingleSteppedArm(rootComp, params);
+
   const arm1Body = createSingleSteppedArm(rootComp, params);
 
   // Transformation: Kurzen Arm in den tetraedrischen Winkel rotieren
@@ -357,8 +377,8 @@ function addShortArmHoles(
       );
 
       const dist = faceCenter.distanceTo(centerPoint);
-      // Die Stirnflächen der kurzen Arme sind ca. 35mm (3.5cm) vom Zentrum entfernt
-      if (dist > 3.0) {
+      // Nur Stirnflächen der kurzen Arme (ca. 35mm / 3.5cm vom Zentrum) selektieren
+      if (Math.abs(dist - 3.5) < 0.5) {
         faces.push(face);
       }
     }
@@ -793,4 +813,329 @@ function createConnectionTube2To3(
   const combineInput = combineFeatures.createInput(node1, toolColl);
   combineInput.operation = adsk.fusion.FeatureOperations.JoinFeatureOperation;
   combineFeatures.add(combineInput);
+}
+
+/**
+ * Erzeugt das geneigte Bein von Node 1 (Winkel 120° zur Basis-Platte, Länge legLength).
+ */
+function createInclinedLegForNode1(
+  rootComp: adsk.fusion.Component,
+  params: ReturnType<typeof setupParameters>
+): adsk.fusion.BRepBody {
+  const sketches = rootComp.sketches;
+  const features = rootComp.features;
+  const extrudeFeatures = features.extrudeFeatures;
+  const xyPlane = rootComp.xYConstructionPlane;
+  const center = adsk.core.Point3D.create(0, 0, 0);
+
+  const sketch = sketches.add(xyPlane);
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.armOuterDiameter.value / 2.0);
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.holeDiameter.value / 2.0);
+
+  let ringProfile: adsk.fusion.Profile | null = null;
+  for (let i = 0; i < sketch.profiles.count; i++) {
+    const prof = sketch.profiles.item(i);
+    if (prof.profileLoops.count === 2) {
+      ringProfile = prof;
+      break;
+    }
+  }
+
+  if (!ringProfile) {
+    const holeArea = Math.PI * Math.pow(params.holeDiameter.value / 2.0, 2);
+    for (let i = 0; i < sketch.profiles.count; i++) {
+      const prof = sketch.profiles.item(i);
+      if (Math.abs(prof.areaProperties().area - holeArea) > 0.1) {
+        ringProfile = prof;
+        break;
+      }
+    }
+  }
+
+  if (!ringProfile) {
+    ringProfile = sketch.profiles.item(0);
+  }
+
+  // Bein-Länge + Plattenhöhe extrudieren, damit das Bein vollständig in die Platte eintaucht
+  const totalLegLen = params.legLength.value + params.basePlateHeight.value;
+  const extInput = extrudeFeatures.createInput(ringProfile, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+  extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(-totalLegLen));
+  const legBody = extrudeFeatures.add(extInput).bodies.item(0);
+
+  // Bein um den Neigungswinkel rotieren (-30° um Y-Achse, sodass Neigung zur Platte 120° beträgt)
+  const angleRad = params.legAngle.value; // 120° in Rad (2*PI/3)
+  const rotAngleRad = -(angleRad - Math.PI / 2.0); // -30° in Radian (-0.5235988 rad)
+
+  const moveFeats = features.moveFeatures;
+  const moveColl = adsk.core.ObjectCollection.create();
+  moveColl.add(legBody);
+  const moveInput = moveFeats.createInput2(moveColl);
+  moveInput.defineAsRotate(rootComp.yConstructionAxis, adsk.core.ValueInput.createByReal(rotAngleRad));
+  moveFeats.add(moveInput);
+
+  return legBody;
+}
+
+/**
+ * Erzeugt die geneigte Basis-Platte (Fuß) für Node 1 mit Versatz (legOffset) und verrundeter Verschneidung.
+ */
+function createInclinedBasePlateFoot(
+  rootComp: adsk.fusion.Component,
+  params: ReturnType<typeof setupParameters>,
+  node1: adsk.fusion.BRepBody
+): adsk.fusion.BRepBody {
+  const constructionPlanes = rootComp.constructionPlanes;
+  const sketches = rootComp.sketches;
+  const features = rootComp.features;
+
+  const legLenCm = params.legLength.value; // 10.0 cm
+  const angleRad = params.legAngle.value; // 120°
+  const offsetCm = params.legOffset.value; // 4.5 cm
+  const plateHeightCm = params.basePlateHeight.value; // 1.0 cm
+
+  // Fußpunkt P_foot am Ende der Bein-Achse
+  const dirX = -Math.cos(angleRad); // 0.5
+  const dirZ = -Math.sin(angleRad); // -0.866025
+
+  const footX = legLenCm * dirX; // 5.0 cm
+  const footZ = legLenCm * dirZ; // -8.66025 cm
+
+  // Zentrums-Punkt der Basis-Platten-Disk (footX - offsetCm)
+  const plateCenterX = footX - offsetCm; // 0.5 cm
+  const plateTopZ = footZ; // -8.66025 cm
+  const plateBottomZ = plateTopZ - plateHeightCm; // -9.66025 cm
+
+  // 1. Versatzebene für die Oberseite der Basis-Platte bei z = plateTopZ
+  const planeInput = constructionPlanes.createInput();
+  planeInput.setByOffset(rootComp.xYConstructionPlane, adsk.core.ValueInput.createByReal(plateTopZ));
+  const topPlane = constructionPlanes.add(planeInput);
+
+  // 2. Skizze auf der Oberseite der Platte: Kreis (160mm) zentriert bei (plateCenterX, 0)
+  const sketch = sketches.add(topPlane);
+  const center3D = adsk.core.Point3D.create(plateCenterX, 0, plateTopZ);
+  const centerPoint = sketch.modelToSketchSpace(center3D);
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, params.basePlateDiameter.value / 2.0);
+
+  if (sketch.profiles.count === 0) return node1;
+  const profile = sketch.profiles.item(0);
+
+  // 3. Extrusion nach unten (-Z) um basePlateHeight (1.0 cm)
+  const extInput = features.extrudeFeatures.createInput(
+    profile,
+    adsk.fusion.FeatureOperations.NewBodyFeatureOperation
+  );
+  extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(-plateHeightCm));
+  const plateFeat = features.extrudeFeatures.add(extInput);
+  if (!plateFeat || plateFeat.bodies.count === 0) return node1;
+
+  const plateBody = plateFeat.bodies.item(0);
+
+  // 4. Verrundung der oberen Kante der Basis-Platte (2mm)
+  filletBasePlateTopEdge(rootComp, plateBody, plateTopZ, params.basePlateDiameter.value / 2.0, params);
+
+  // 5. Basis-Platte mit Node 1 verschmelzen (Join)
+  const tools = adsk.core.ObjectCollection.create();
+  tools.add(plateBody);
+  features.combineFeatures.add(features.combineFeatures.createInput(node1, tools));
+
+  // 6. Verrundung der geneigten Verschneidungskante (4mm)
+  filletLegPlateJunction(rootComp, node1, plateTopZ, params.armOuterDiameter.value / 2.0, params);
+
+  // 7. Kabelkanal-Loch erzeugen (6mm Loch, 4.5mm über Unterseite, cableHoleOffset von Plattenmitte)
+  createCableHoleInFoot(rootComp, params, plateCenterX, plateBottomZ);
+
+  // 8. Unterseite bündig schneiden
+  trimBottomFlushAtZ(rootComp, node1, plateBottomZ, params.basePlateDiameter.value);
+
+  return node1;
+}
+
+/**
+ * Verrundet die obere Kante der Basis-Platte (2mm).
+ */
+function filletBasePlateTopEdge(
+  rootComp: adsk.fusion.Component,
+  body: adsk.fusion.BRepBody,
+  topZ: number,
+  radius: number,
+  _params: ReturnType<typeof setupParameters>
+): void {
+  const expectedLen = 2.0 * Math.PI * radius;
+  let targetEdge: adsk.fusion.BRepEdge | null = null;
+
+  for (let i = 0; i < body.edges.count; i++) {
+    const edge = body.edges.item(i);
+    const bb = edge.boundingBox;
+    if (Math.abs(bb.minPoint.z - topZ) < 0.1 && Math.abs(bb.maxPoint.z - topZ) < 0.1) {
+      if (Math.abs(edge.length - expectedLen) < 1.0) {
+        targetEdge = edge;
+        break;
+      }
+    }
+  }
+
+  if (targetEdge) {
+    const filletInput = rootComp.features.filletFeatures.createInput();
+    const edgeColl = adsk.core.ObjectCollection.create();
+    edgeColl.add(targetEdge);
+    filletInput.edgeSetInputs.addConstantRadiusEdgeSet(
+      edgeColl,
+      adsk.core.ValueInput.createByString('base_plate_rounding'),
+      false
+    );
+    try {
+      rootComp.features.filletFeatures.add(filletInput);
+    } catch (_e) {
+      // Fallback
+    }
+  }
+}
+
+/**
+ * Verrundet die Verschneidungskante zwischen Bein-Außenwand und Basis-Platte (4mm).
+ */
+function filletLegPlateJunction(
+  rootComp: adsk.fusion.Component,
+  body: adsk.fusion.BRepBody,
+  topZ: number,
+  legRadius: number,
+  _params: ReturnType<typeof setupParameters>
+): void {
+  const expectedLen = 2.0 * Math.PI * legRadius;
+  const edges: adsk.fusion.BRepEdge[] = [];
+
+  for (let i = 0; i < body.edges.count; i++) {
+    const edge = body.edges.item(i);
+    const bb = edge.boundingBox;
+    if (Math.abs(bb.minPoint.z - topZ) < 0.3 && Math.abs(bb.maxPoint.z - topZ) < 0.3) {
+      if (Math.abs(edge.length - expectedLen) < 2.0) {
+        edges.push(edge);
+      }
+    }
+  }
+
+  if (edges.length > 0) {
+    const filletInput = rootComp.features.filletFeatures.createInput();
+    const edgeColl = adsk.core.ObjectCollection.create();
+    for (const e of edges) {
+      edgeColl.add(e);
+    }
+    filletInput.edgeSetInputs.addConstantRadiusEdgeSet(
+      edgeColl,
+      adsk.core.ValueInput.createByString('leg_plate_rounding'),
+      false
+    );
+    try {
+      rootComp.features.filletFeatures.add(filletInput);
+    } catch (_e) {
+      // Fallback
+    }
+  }
+}
+
+/**
+ * Erzeugt den Kabelkanal im Fuß.
+ */
+function createCableHoleInFoot(
+  rootComp: adsk.fusion.Component,
+  params: ReturnType<typeof setupParameters>,
+  plateCenterX: number,
+  plateBottomZ: number
+): void {
+  const constructionPlanes = rootComp.constructionPlanes;
+  const planeInput = constructionPlanes.createInput();
+
+  const offsetVal = plateCenterX + params.cableHoleOffset.value; // 7.0 cm Versatz vom Plattenmittelpunkt
+  planeInput.setByOffset(rootComp.yZConstructionPlane, adsk.core.ValueInput.createByReal(offsetVal));
+  const offsetPlane = constructionPlanes.add(planeInput);
+
+  const sketches = rootComp.sketches;
+  const sketch = sketches.add(offsetPlane);
+
+  const holeRadius = params.cableHoleDiameter.value / 2.0; // 0.3 cm
+  const holeH = params.cableHoleHeight.value; // 0.45 cm
+  const holeZ = plateBottomZ + holeH;
+
+  const center3D = adsk.core.Point3D.create(offsetVal, 0, holeZ);
+  const centerPoint = sketch.modelToSketchSpace(center3D);
+
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, holeRadius);
+
+  if (sketch.profiles.count === 0) return;
+  const profile = sketch.profiles.item(0);
+
+  const extrudeFeatures = rootComp.features.extrudeFeatures;
+  const cutInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+  cutInput.setSymmetricExtent(adsk.core.ValueInput.createByReal(1.6), false);
+
+  const cutFeature = extrudeFeatures.add(cutInput);
+
+  // Abfasung (0.3mm) an den Lochkanten
+  if (cutFeature && cutFeature.sideFaces && params.cableHoleChamfer.value > 0) {
+    const chamferEdges: adsk.fusion.BRepEdge[] = [];
+    for (let f = 0; f < cutFeature.sideFaces.count; f++) {
+      const face = cutFeature.sideFaces.item(f);
+      for (let e = 0; e < face.edges.count; e++) {
+        const edge = face.edges.item(e);
+        if (!chamferEdges.includes(edge)) {
+          chamferEdges.push(edge);
+        }
+      }
+    }
+
+    if (chamferEdges.length > 0) {
+      const chamferFeatures = rootComp.features.chamferFeatures;
+      const chamferInput = chamferFeatures.createInput2();
+      const edgeColl = adsk.core.ObjectCollection.create();
+      for (const edge of chamferEdges) {
+        edgeColl.add(edge);
+      }
+      chamferInput.chamferEdgeSets.addEqualDistanceChamferEdgeSet(
+        edgeColl,
+        adsk.core.ValueInput.createByString('cable_hole_chamfer'),
+        true
+      );
+      try {
+        chamferFeatures.add(chamferInput);
+      } catch (_e) {
+        // Fallback
+      }
+    }
+  }
+}
+
+/**
+ * Schneidet Geometrieüberstände unterhalb der Unterseite der Basis-Platte plan ab, falls solche vorhanden sind.
+ */
+function trimBottomFlushAtZ(
+  rootComp: adsk.fusion.Component,
+  body: adsk.fusion.BRepBody,
+  plateBottomZ: number,
+  baseDiameterCm: number
+): void {
+  // Nur schneiden, wenn der Körper tatsächlich unter plateBottomZ herausragt!
+  if (body.boundingBox.minPoint.z >= plateBottomZ - 0.05) {
+    return; // Unterseite ist bereits plan/bündig
+  }
+
+  const planeInput = rootComp.constructionPlanes.createInput();
+  planeInput.setByOffset(rootComp.xYConstructionPlane, adsk.core.ValueInput.createByReal(plateBottomZ));
+  const bottomPlane = rootComp.constructionPlanes.add(planeInput);
+
+  const sketch = rootComp.sketches.add(bottomPlane);
+  const center = adsk.core.Point3D.create(0, 0, 0);
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, baseDiameterCm);
+
+  if (sketch.profiles.count === 0) return;
+  const profile = sketch.profiles.item(0);
+
+  const extrudeFeatures = rootComp.features.extrudeFeatures;
+  const cutInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+  cutInput.participantBodies = [body];
+  cutInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(-5.0)); // 5cm nach unten schneiden
+  try {
+    extrudeFeatures.add(cutInput);
+  } catch (_e) {
+    // Falls kein Material geschnitten werden muss
+  }
 }
