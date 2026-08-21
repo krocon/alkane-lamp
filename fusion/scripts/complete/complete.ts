@@ -866,7 +866,7 @@ function createVerticalLegForNode1(
 /**
  * Erzeugt die im Tetraederwinkel geneigte Basis-Platte (Fuß) für Node 1.
  * Das Bein verläuft vertikal entlang der Z-Achse und zeigt direkt auf das Zentrum von Node 1 (0,0,0).
- * Das Bein wird an der geneigten Unterseite der Basis-Platte exakt bündig abgeschnitten.
+ * Der Kabelkanal verläuft 100% parallel zur geneigten Basis-Platte bis zur Fußarm-Mitte (X = 0).
  */
 function createTiltedBasePlateFoot(
   rootComp: adsk.fusion.Component,
@@ -927,7 +927,36 @@ function createTiltedBasePlateFoot(
     }
   }
 
-  // 3. Beide Körper (Platte + Trim-Tool) zusammen um rotAngleRad drehen
+  // 3. Skizze & Extrusion für das Kabelkanal-Werkzeug (Cable-Tool, 6mm)
+  // Das Werkzeug verläuft vom Rand der Platte (-offsetCm + cableHoleOffset) nach innen bis zur Fußarm-Mitte (X = 0)
+  let cableToolBody: adsk.fusion.BRepBody | null = null;
+  const cableOffsetVal = -offsetCm + params.cableHoleOffset.value; // -4.5 + 7.0 = +2.5 cm
+  const cablePlaneInput = constructionPlanes.createInput();
+  cablePlaneInput.setByOffset(rootComp.yZConstructionPlane, adsk.core.ValueInput.createByReal(cableOffsetVal));
+  const cablePlane = constructionPlanes.add(cablePlaneInput);
+
+  const cableSketch = sketches.add(cablePlane);
+  const holeRadius = params.cableHoleDiameter.value / 2.0; // 0.3 cm
+  const holeH = params.cableHoleHeight.value; // 0.45 cm
+  const holeZ = plateBottomZ + holeH;
+  const cableCenterPoint = cableSketch.modelToSketchSpace(adsk.core.Point3D.create(cableOffsetVal, 0, holeZ));
+  cableSketch.sketchCurves.sketchCircles.addByCenterRadius(cableCenterPoint, holeRadius);
+
+  if (cableSketch.profiles.count > 0) {
+    const cableExtInput = features.extrudeFeatures.createInput(
+      cableSketch.profiles.item(0),
+      adsk.fusion.FeatureOperations.NewBodyFeatureOperation
+    );
+    const cutDistanceCm = -(cableOffsetVal + 0.5); // z.B. -3.0 cm nach innen bis X = -0.5 cm
+    cableExtInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(cutDistanceCm));
+    const cableFeat = features.extrudeFeatures.add(cableExtInput);
+    if (cableFeat && cableFeat.bodies.count > 0) {
+      cableToolBody = cableFeat.bodies.item(0);
+    }
+  }
+
+  // 4. Alle Werkzeug- und Plattenkörper zusammen um rotAngleRad drehen
+  // Dadurch ist der Kabelkanal 100% exakt parallel zur geneigten Basis-Platte!
   const rotAngleRad = params.legAngle.value - Math.PI / 2.0;
   const transformMatrix = adsk.core.Matrix3D.create();
   transformMatrix.setToRotation(
@@ -939,22 +968,35 @@ function createTiltedBasePlateFoot(
   const moveFeats = features.moveFeatures;
   const moveColl = adsk.core.ObjectCollection.create();
   moveColl.add(plateBody);
-  if (trimToolBody) {
-    moveColl.add(trimToolBody);
-  }
+  if (trimToolBody) moveColl.add(trimToolBody);
+  if (cableToolBody) moveColl.add(cableToolBody);
+
   const moveInput = moveFeats.createInput2(moveColl);
   moveInput.defineAsFreeMove(transformMatrix);
   moveFeats.add(moveInput);
 
-  // 4. Verrundung der oberen Kante der Basis-Platte (2mm)
+  // 5. Verrundung der oberen Kante der Basis-Platte (2mm)
   filletBasePlateTopEdge(rootComp, plateBody, plateTopZ, params.basePlateDiameter.value / 2.0, params);
 
-  // 5. Basis-Platte mit Node 1 verschmelzen (Join)
+  // 6. Basis-Platte mit Node 1 verschmelzen (Join)
   const joinTools = adsk.core.ObjectCollection.create();
   joinTools.add(plateBody);
   features.combineFeatures.add(features.combineFeatures.createInput(node1, joinTools));
 
-  // 6. Geometrie unterhalb der geneigten Platten-Unterseite bündig abschneiden (Cut)
+  // 7. Kabelkanal durch Schneiden des mitgedrehten Cable-Tools erzeugen (Cut)
+  if (cableToolBody) {
+    const cableTools = adsk.core.ObjectCollection.create();
+    cableTools.add(cableToolBody);
+    const cableCutInput = features.combineFeatures.createInput(node1, cableTools);
+    cableCutInput.operation = adsk.fusion.FeatureOperations.CutFeatureOperation;
+    try {
+      features.combineFeatures.add(cableCutInput);
+    } catch (_e) {
+      // Fallback
+    }
+  }
+
+  // 8. Geometrie unterhalb der geneigten Platten-Unterseite bündig abschneiden (Cut)
   if (trimToolBody) {
     const cutTools = adsk.core.ObjectCollection.create();
     cutTools.add(trimToolBody);
@@ -967,13 +1009,45 @@ function createTiltedBasePlateFoot(
     }
   }
 
-  // 7. Verrundung der Verschneidungskante zwischen Z-Bein und geneigter Basis-Platte (4mm)
+  // 9. Verrundung der Verschneidungskante zwischen Z-Bein und geneigter Basis-Platte (4mm)
   filletLegPlateJunction(rootComp, node1, plateTopZ, params.armOuterDiameter.value / 2.0, params);
 
-  // 8. Kabelkanal-Loch erzeugen
-  createCableHoleInFoot(rootComp, params, -offsetCm, plateBottomZ);
+  // 10. 31.5mm Innenbohrung durchgehend durch die Basis-Platte freischneiden
+  boreVerticalLegHole(rootComp, params, node1);
+
+  // 11. Abfasung (0.3mm) an der Lochkante der Kabelkanal-Eintrittsöffnung anbringen
+  chamferCableHoleOpening(rootComp, params, node1);
 
   return node1;
+}
+
+/**
+ * Schneidet die 31.5mm Innenbohrung des Z-Beins durchgehend durch die Basis-Platte frei.
+ */
+function boreVerticalLegHole(
+  rootComp: adsk.fusion.Component,
+  params: ReturnType<typeof setupParameters>,
+  node1: adsk.fusion.BRepBody
+): void {
+  const sketches = rootComp.sketches;
+  const features = rootComp.features;
+  const extrudeFeatures = features.extrudeFeatures;
+
+  const sketch = sketches.add(rootComp.xYConstructionPlane);
+  const center = adsk.core.Point3D.create(0, 0, 0);
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.holeDiameter.value / 2.0);
+
+  if (sketch.profiles.count === 0) return;
+  const profile = sketch.profiles.item(0);
+
+  const cutInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+  cutInput.participantBodies = [node1];
+  cutInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(-15.0));
+  try {
+    extrudeFeatures.add(cutInput);
+  } catch (_e) {
+    // Fallback
+  }
 }
 
 /**
@@ -1060,72 +1134,45 @@ function filletLegPlateJunction(
 }
 
 /**
- * Erzeugt den Kabelkanal im Fuß.
+ * Bringt eine Abfasung (0.3mm) an der äußeren Eintrittsöffnung des Kabelkanals an.
  */
-function createCableHoleInFoot(
+function chamferCableHoleOpening(
   rootComp: adsk.fusion.Component,
   params: ReturnType<typeof setupParameters>,
-  plateCenterX: number,
-  plateBottomZ: number
+  body: adsk.fusion.BRepBody
 ): void {
-  const constructionPlanes = rootComp.constructionPlanes;
-  const planeInput = constructionPlanes.createInput();
+  const chamferVal = params.cableHoleChamfer.value;
+  if (chamferVal <= 0) return;
 
-  const offsetVal = plateCenterX + params.cableHoleOffset.value; // 7.0 cm Versatz vom Plattenmittelpunkt
-  planeInput.setByOffset(rootComp.yZConstructionPlane, adsk.core.ValueInput.createByReal(offsetVal));
-  const offsetPlane = constructionPlanes.add(planeInput);
+  const targetRadius = params.cableHoleDiameter.value / 2.0; // 0.3 cm
+  const expectedLen = 2.0 * Math.PI * targetRadius;
 
-  const sketches = rootComp.sketches;
-  const sketch = sketches.add(offsetPlane);
-
-  const holeRadius = params.cableHoleDiameter.value / 2.0; // 0.3 cm
-  const holeH = params.cableHoleHeight.value; // 0.45 cm
-  const holeZ = plateBottomZ + holeH;
-
-  const center3D = adsk.core.Point3D.create(offsetVal, 0, holeZ);
-  const centerPoint = sketch.modelToSketchSpace(center3D);
-
-  sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, holeRadius);
-
-  if (sketch.profiles.count === 0) return;
-  const profile = sketch.profiles.item(0);
-
-  const extrudeFeatures = rootComp.features.extrudeFeatures;
-  const cutInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
-  cutInput.setSymmetricExtent(adsk.core.ValueInput.createByReal(1.6), false);
-
-  const cutFeature = extrudeFeatures.add(cutInput);
-
-  // Abfasung (0.3mm) an den Lochkanten
-  if (cutFeature && cutFeature.sideFaces && params.cableHoleChamfer.value > 0) {
-    const chamferEdges: adsk.fusion.BRepEdge[] = [];
-    for (let f = 0; f < cutFeature.sideFaces.count; f++) {
-      const face = cutFeature.sideFaces.item(f);
-      for (let e = 0; e < face.edges.count; e++) {
-        const edge = face.edges.item(e);
-        if (!chamferEdges.includes(edge)) {
-          chamferEdges.push(edge);
-        }
+  const chamferEdges: adsk.fusion.BRepEdge[] = [];
+  for (let i = 0; i < body.edges.count; i++) {
+    const edge = body.edges.item(i);
+    if (Math.abs(edge.length - expectedLen) < 0.5) {
+      if (edge.boundingBox.maxPoint.x > 1.0) {
+        chamferEdges.push(edge);
       }
     }
+  }
 
-    if (chamferEdges.length > 0) {
-      const chamferFeatures = rootComp.features.chamferFeatures;
-      const chamferInput = chamferFeatures.createInput2();
-      const edgeColl = adsk.core.ObjectCollection.create();
-      for (const edge of chamferEdges) {
-        edgeColl.add(edge);
-      }
-      chamferInput.chamferEdgeSets.addEqualDistanceChamferEdgeSet(
-        edgeColl,
-        adsk.core.ValueInput.createByString('cable_hole_chamfer'),
-        true
-      );
-      try {
-        chamferFeatures.add(chamferInput);
-      } catch (_e) {
-        // Fallback
-      }
+  if (chamferEdges.length > 0) {
+    const chamferFeatures = rootComp.features.chamferFeatures;
+    const chamferInput = chamferFeatures.createInput2();
+    const edgeColl = adsk.core.ObjectCollection.create();
+    for (const edge of chamferEdges) {
+      edgeColl.add(edge);
+    }
+    chamferInput.chamferEdgeSets.addEqualDistanceChamferEdgeSet(
+      edgeColl,
+      adsk.core.ValueInput.createByString('cable_hole_chamfer'),
+      true
+    );
+    try {
+      chamferFeatures.add(chamferInput);
+    } catch (_e) {
+      // Fallback
     }
   }
 }
