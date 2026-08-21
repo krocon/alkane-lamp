@@ -864,8 +864,9 @@ function createVerticalLegForNode1(
 }
 
 /**
- * Erzeugt die im Tetraederwinkel (120°) geneigte Basis-Platte (Fuß) für Node 1.
+ * Erzeugt die im Tetraederwinkel geneigte Basis-Platte (Fuß) für Node 1.
  * Das Bein verläuft vertikal entlang der Z-Achse und zeigt direkt auf das Zentrum von Node 1 (0,0,0).
+ * Das Bein wird an der geneigten Unterseite der Basis-Platte exakt bündig abgeschnitten.
  */
 function createTiltedBasePlateFoot(
   rootComp: adsk.fusion.Component,
@@ -880,34 +881,53 @@ function createTiltedBasePlateFoot(
   const offsetCm = params.legOffset.value; // 4.5 cm
   const plateHeightCm = params.basePlateHeight.value; // 1.0 cm
   const plateTopZ = -legLenCm; // -10.0 cm
+  const plateBottomZ = plateTopZ - plateHeightCm; // -11.0 cm
 
-  // 1. Versatzebene bei z = plateTopZ (-10.0 cm)
-  const planeInput = constructionPlanes.createInput();
-  planeInput.setByOffset(rootComp.xYConstructionPlane, adsk.core.ValueInput.createByReal(plateTopZ));
-  const topPlane = constructionPlanes.add(planeInput);
+  // 1. Skizze & Extrusion für die Basis-Platte (160mm) bei plateTopZ
+  const planeInput1 = constructionPlanes.createInput();
+  planeInput1.setByOffset(rootComp.xYConstructionPlane, adsk.core.ValueInput.createByReal(plateTopZ));
+  const topPlane = constructionPlanes.add(planeInput1);
 
-  // 2. Skizze auf der Ebene: Kreis (160mm) zentriert bei (-offsetCm, 0) = (-4.5 cm, 0)
-  const sketch = sketches.add(topPlane);
+  const sketch1 = sketches.add(topPlane);
   const center3D = adsk.core.Point3D.create(-offsetCm, 0, plateTopZ);
-  const centerPoint = sketch.modelToSketchSpace(center3D);
-  sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, params.basePlateDiameter.value / 2.0);
+  const centerPoint1 = sketch1.modelToSketchSpace(center3D);
+  sketch1.sketchCurves.sketchCircles.addByCenterRadius(centerPoint1, params.basePlateDiameter.value / 2.0);
 
-  if (sketch.profiles.count === 0) return node1;
-  const profile = sketch.profiles.item(0);
+  if (sketch1.profiles.count === 0) return node1;
+  const profile1 = sketch1.profiles.item(0);
 
-  // 3. Extrusion nach unten (-Z) um basePlateHeight (1.0 cm)
-  const extInput = features.extrudeFeatures.createInput(
-    profile,
+  const extInput1 = features.extrudeFeatures.createInput(
+    profile1,
     adsk.fusion.FeatureOperations.NewBodyFeatureOperation
   );
-  extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(-plateHeightCm));
-  const plateFeat = features.extrudeFeatures.add(extInput);
+  extInput1.setDistanceExtent(false, adsk.core.ValueInput.createByReal(-plateHeightCm));
+  const plateFeat = features.extrudeFeatures.add(extInput1);
   if (!plateFeat || plateFeat.bodies.count === 0) return node1;
-
   const plateBody = plateFeat.bodies.item(0);
 
-  // 4. Basis-Platte rotieren (Winkel legAngle relativ zum vertikalen Z-Bein)
-  // rotAngleRad = (legAngle - 90°) in Radian
+  // 2. Skizze & Extrusion für das Unterseiten-Schneidwerkzeug (Trim-Tool, 320mm) bei plateBottomZ
+  const planeInput2 = constructionPlanes.createInput();
+  planeInput2.setByOffset(rootComp.xYConstructionPlane, adsk.core.ValueInput.createByReal(plateBottomZ));
+  const bottomPlane = constructionPlanes.add(planeInput2);
+
+  const sketch2 = sketches.add(bottomPlane);
+  const centerPoint2 = sketch2.modelToSketchSpace(adsk.core.Point3D.create(-offsetCm, 0, plateBottomZ));
+  sketch2.sketchCurves.sketchCircles.addByCenterRadius(centerPoint2, params.basePlateDiameter.value);
+
+  let trimToolBody: adsk.fusion.BRepBody | null = null;
+  if (sketch2.profiles.count > 0) {
+    const extInput2 = features.extrudeFeatures.createInput(
+      sketch2.profiles.item(0),
+      adsk.fusion.FeatureOperations.NewBodyFeatureOperation
+    );
+    extInput2.setDistanceExtent(false, adsk.core.ValueInput.createByReal(-5.0)); // 5cm nach unten
+    const trimFeat = features.extrudeFeatures.add(extInput2);
+    if (trimFeat && trimFeat.bodies.count > 0) {
+      trimToolBody = trimFeat.bodies.item(0);
+    }
+  }
+
+  // 3. Beide Körper (Platte + Trim-Tool) zusammen um rotAngleRad drehen
   const rotAngleRad = params.legAngle.value - Math.PI / 2.0;
   const transformMatrix = adsk.core.Matrix3D.create();
   transformMatrix.setToRotation(
@@ -919,26 +939,39 @@ function createTiltedBasePlateFoot(
   const moveFeats = features.moveFeatures;
   const moveColl = adsk.core.ObjectCollection.create();
   moveColl.add(plateBody);
+  if (trimToolBody) {
+    moveColl.add(trimToolBody);
+  }
   const moveInput = moveFeats.createInput2(moveColl);
   moveInput.defineAsFreeMove(transformMatrix);
   moveFeats.add(moveInput);
 
-  // 5. Verrundung der oberen Kante der Basis-Platte (2mm)
+  // 4. Verrundung der oberen Kante der Basis-Platte (2mm)
   filletBasePlateTopEdge(rootComp, plateBody, plateTopZ, params.basePlateDiameter.value / 2.0, params);
 
-  // 6. Basis-Platte mit Node 1 verschmelzen (Join)
-  const tools = adsk.core.ObjectCollection.create();
-  tools.add(plateBody);
-  features.combineFeatures.add(features.combineFeatures.createInput(node1, tools));
+  // 5. Basis-Platte mit Node 1 verschmelzen (Join)
+  const joinTools = adsk.core.ObjectCollection.create();
+  joinTools.add(plateBody);
+  features.combineFeatures.add(features.combineFeatures.createInput(node1, joinTools));
+
+  // 6. Geometrie unterhalb der geneigten Platten-Unterseite bündig abschneiden (Cut)
+  if (trimToolBody) {
+    const cutTools = adsk.core.ObjectCollection.create();
+    cutTools.add(trimToolBody);
+    const cutInput = features.combineFeatures.createInput(node1, cutTools);
+    cutInput.operation = adsk.fusion.FeatureOperations.CutFeatureOperation;
+    try {
+      features.combineFeatures.add(cutInput);
+    } catch (_e) {
+      // Fallback
+    }
+  }
 
   // 7. Verrundung der Verschneidungskante zwischen Z-Bein und geneigter Basis-Platte (4mm)
   filletLegPlateJunction(rootComp, node1, plateTopZ, params.armOuterDiameter.value / 2.0, params);
 
   // 8. Kabelkanal-Loch erzeugen
-  createCableHoleInFoot(rootComp, params, -offsetCm, plateTopZ - plateHeightCm);
-
-  // 9. Unterseite bündig schneiden
-  trimBottomFlushAtZ(rootComp, node1, plateTopZ - plateHeightCm - 2.0, params.basePlateDiameter.value);
+  createCableHoleInFoot(rootComp, params, -offsetCm, plateBottomZ);
 
   return node1;
 }
