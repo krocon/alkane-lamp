@@ -31,6 +31,18 @@ Diese Datei enthält Richtlinien und Best Practices für alle automatisierten Ä
 - **API-Struktur:** Achte auf die korrekte Trennung von `adsk.core` (Anwendung, UI, Geometrie-Primitiven wie Matrix3D, Point3D) und `adsk.fusion` (Design, Components, Features, BRepBody).
 - **Transformationen & Ausrichtung:** Nutze für 3D-Ausrichtungen präzise Vektor- und Matrixberechnungen (`adsk.core.Matrix3D`, `adsk.core.Vector3D`) statt ungenauer Winkelannahmen.
 
+### 2.3 Best Practices für Ebenen & Skizzengeometrie
+- **Versatzebenen (`ConstructionPlaneInput.setByOffset`):**
+  - Erzeuge Versatzebenen direkt mit `adsk.core.ValueInput.createByReal(offsetInCm)` (Wert in cm, z. B. `7.0` für 70mm).
+  - *Wichtig:* Keine mehrfachen Fallback-Versuche (`setByOffset`) auf demselben `planeInput`-Objekt durchführen. Ein fehlerhafter Aufruf korrumpiert das `planeInput`-Objekt, woraufhin `constructionPlanes.add(planeInput)` fälschlicherweise eine unversetzte Ebene durch den Ursprung `(0,0,0)` erstellt.
+- **2D-Skizzenkoordinaten & `modelToSketchSpace`:**
+  - 2D-Skizzenfunktionen (z. B. `sketchCircles.addByCenterRadius`) werten nur `x` (Skizzen-X) und `y` (Skizzen-Y) des übergebenen `Point3D` aus – eine manuell gesetzte `z`-Koordinate auf dem `Point3D` wird von 2D-Skizzen ignoriert.
+  - Verwende für Punkte im 3D-Modellraum stets den vollständigen 3D-Punkt inkl. Ebenen-Offset (z. B. `x = 7.0` für 70mm Versatz) und konvertiere ihn mit `sketch.modelToSketchSpace(...)` in den Skizzenraum:
+    ```typescript
+    const center3D = adsk.core.Point3D.create(holeOffsetCm, 0, holeHeightCm); // 3D-Weltkoordinaten (7.0, 0, 0.8)
+    const centerPoint = sketch.modelToSketchSpace(center3D);
+    ```
+
 ---
 
 ## 3. Workflow & Verifikation
