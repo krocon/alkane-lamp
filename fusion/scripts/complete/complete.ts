@@ -22,8 +22,8 @@ export function run(_context: string): void {
     // 1. Parameter definieren
     const params = setupParameters(design);
 
-    // 2. Ersten Tetrapod (Node 1) im Ursprung (0,0,0) erzeugen (Arm in -Z Richtung ist das Bein)
-    const targetBody = createTetrapod(rootComp, params, true);
+    // 2. Ersten Tetrapod (Node 1) im Ursprung (0,0,0) erzeugen (Arm 0: Bein, Arm 1: kurz, Arm 2 & 3: 8cm Gewindearme)
+    const targetBody = createTetrapod(rootComp, params, ['leg', 'short', 'threaded', 'threaded']);
     targetBody.name = 'Node_1';
 
     // 3. Kugel aus dem Zentrum von Node 1 ausschneiden (Zentralknoten hohl machen)
@@ -32,8 +32,8 @@ export function run(_context: string): void {
     // 4. Geneigten Fuß (Basis-Platte + Verrundungen + Kabelkanal) an das vertikale Bein von Node 1 anfügen
     createTiltedBasePlateFoot(rootComp, params, targetBody);
 
-    // 5. Zweiten Tetrapod (Node 2) erzeugen (nur kurze Arme)
-    const node2 = createTetrapod(rootComp, params, false);
+    // 5. Zweiten Tetrapod (Node 2) erzeugen (Arm 0 & 1: kurz, Arm 2 & 3: 8cm Gewindearme)
+    const node2 = createTetrapod(rootComp, params, ['short', 'short', 'threaded', 'threaded']);
     node2.name = 'Node_2';
 
     // Kugel aus dem Zentrum von Node 2 ausschneiden
@@ -42,8 +42,8 @@ export function run(_context: string): void {
     // Node 2 positionieren (Zentrum in XZ-Ebene, 8 cm Abstand zu Node 1)
     const center2 = positionSecondTetrapod(rootComp, node2);
 
-    // 6. Dritten Tetrapod (Node 3) erzeugen (nur kurze Arme)
-    const node3 = createTetrapod(rootComp, params, false);
+    // 6. Dritten Tetrapod (Node 3) erzeugen (Arm 0: kurz, Arm 1, 2 & 3: 8cm Gewindearme)
+    const node3 = createTetrapod(rootComp, params, ['short', 'threaded', 'threaded', 'threaded']);
     node3.name = 'Node_3';
 
     // Kugel aus dem Zentrum von Node 3 ausschneiden
@@ -283,68 +283,119 @@ function createSingleSteppedArm(
   return ringBody;
 }
 
+type ArmType = 'leg' | 'short' | 'threaded';
+
 /**
  * Orchestriert den Zusammenbau des Tetrapoden.
- * Erzeugt vier Arme, die im tetraedrischen Winkel angeordnet werden.
+ * Erzeugt vier Arme (Bein, kurzer Verbindungsarm oder 8cm Gewindearm), die im tetraedrischen Winkel angeordnet werden.
  *
  * @param rootComp Die Wurzelkomponente.
  * @param params Die Benutzerparameter.
- * @param isNode1 Wenn true, wird Arm 0 als langes Z-Bein erzeugt.
+ * @param armTypes Typen der 4 Arme: [Arm0, Arm1, Arm2, Arm3]
  * @returns Der finale, kombinierte Tetrapod-Körper.
  */
 function createTetrapod(
   rootComp: adsk.fusion.Component,
   params: ReturnType<typeof setupParameters>,
-  isNode1: boolean = false
+  armTypes: [ArmType, ArmType, ArmType, ArmType]
 ): adsk.fusion.BRepBody {
   const features = rootComp.features;
-
-  // Arm 0: Für Node 1 als vertikales Bein (Z-Achse), für andere Nodes als kurzer Arm
-  const arm0Body = isNode1
-    ? createVerticalLegForNode1(rootComp, params)
-    : createSingleSteppedArm(rootComp, params);
-
-  const arm1Body = createSingleSteppedArm(rootComp, params);
-
-  // Transformation: Kurzen Arm in den tetraedrischen Winkel rotieren
-  // Der Winkel zwischen den Bindungen eines idealen Tetraeders beträgt arccos(-1/3) ≈ 109.47°
   const moveFeats = features.moveFeatures;
+  const tetraAngle = adsk.core.ValueInput.createByString('109.47122063449069deg');
+  const tetraAngleRad = Math.acos(-1.0 / 3.0);
+
+  // Arm 0: Position -Z Achse (keine Rotation)
+  const arm0Body = createArmBody(rootComp, params, armTypes[0]);
+
+  // Arm 1: Um tetraAngle (109.47°) um Y-Achse rotieren
+  const arm1Body = createArmBody(rootComp, params, armTypes[1]);
   const moveColl1 = adsk.core.ObjectCollection.create();
   moveColl1.add(arm1Body);
   const moveInput1 = moveFeats.createInput2(moveColl1);
-  const tetraAngle = adsk.core.ValueInput.createByString('109.47122063449069deg');
   moveInput1.defineAsRotate(rootComp.yConstructionAxis, tetraAngle);
   moveFeats.add(moveInput1);
 
-  // Muster: Den rotierten Arm 3-mal um die Z-Achse vervielfältigen
-  const circPatterns = features.circularPatternFeatures;
-  const entColl = adsk.core.ObjectCollection.create();
-  entColl.add(arm1Body);
-  const patternInput = circPatterns.createInput(entColl, rootComp.zConstructionAxis);
-  patternInput.quantity = adsk.core.ValueInput.createByString('3');
-  patternInput.totalAngle = adsk.core.ValueInput.createByString('360deg');
-  const patternFeat = circPatterns.add(patternInput);
+  // Arm 2: Um tetraAngle um Y-Achse rotieren, dann 120° um Z-Achse rotieren
+  const arm2Body = createArmBody(rootComp, params, armTypes[2]);
+  const moveColl2 = adsk.core.ObjectCollection.create();
+  moveColl2.add(arm2Body);
+  const moveInput2 = moveFeats.createInput2(moveColl2);
+  const mat2 = adsk.core.Matrix3D.create();
+  mat2.setToRotation(tetraAngleRad, adsk.core.Vector3D.create(0, 1, 0), adsk.core.Point3D.create(0, 0, 0));
+  const rotZ120 = adsk.core.Matrix3D.create();
+  rotZ120.setToRotation((120.0 * Math.PI) / 180.0, adsk.core.Vector3D.create(0, 0, 1), adsk.core.Point3D.create(0, 0, 0));
+  mat2.transformBy(rotZ120);
+  moveInput2.defineAsFreeMove(mat2);
+  moveFeats.add(moveInput2);
 
-  // Alle erzeugten Körper für die finale Vereinigung (Join) sammeln
-  const toolBodies = adsk.core.ObjectCollection.create();
-  toolBodies.add(arm1Body);
-  for (let i = 0; i < patternFeat.bodies.count; i++) {
-    const b = patternFeat.bodies.item(i);
-    if (b.name !== arm1Body.name) {
-      toolBodies.add(b);
-    }
-  }
+  // Arm 3: Um tetraAngle um Y-Achse rotieren, dann 240° um Z-Achse rotieren
+  const arm3Body = createArmBody(rootComp, params, armTypes[3]);
+  const moveColl3 = adsk.core.ObjectCollection.create();
+  moveColl3.add(arm3Body);
+  const moveInput3 = moveFeats.createInput2(moveColl3);
+  const mat3 = adsk.core.Matrix3D.create();
+  mat3.setToRotation(tetraAngleRad, adsk.core.Vector3D.create(0, 1, 0), adsk.core.Point3D.create(0, 0, 0));
+  const rotZ240 = adsk.core.Matrix3D.create();
+  rotZ240.setToRotation((240.0 * Math.PI) / 180.0, adsk.core.Vector3D.create(0, 0, 1), adsk.core.Point3D.create(0, 0, 0));
+  mat3.transformBy(rotZ240);
+  moveInput3.defineAsFreeMove(mat3);
+  moveFeats.add(moveInput3);
 
   // Alle Arme zu einem einzigen Körper verschmelzen
+  const toolBodies = adsk.core.ObjectCollection.create();
+  toolBodies.add(arm1Body);
+  toolBodies.add(arm2Body);
+  toolBodies.add(arm3Body);
+
   const combineFeatures = features.combineFeatures;
   const combineInput = combineFeatures.createInput(arm0Body, toolBodies);
   combineInput.operation = adsk.fusion.FeatureOperations.JoinFeatureOperation;
   combineFeatures.add(combineInput);
 
-  // Bohrungen (Löcher) in die 4 kurzen Arme erzeugen
+  // Bohrungen (Löcher) in die kurzen Arme erzeugen
   addShortArmHoles(rootComp, arm0Body, params.holeDiameter);
 
   return arm0Body;
+}
+
+/**
+ * Erzeugt den Arm-Körper für einen bestimmten Arm-Typ.
+ */
+function createArmBody(
+  rootComp: adsk.fusion.Component,
+  params: ReturnType<typeof setupParameters>,
+  armType: ArmType
+): adsk.fusion.BRepBody {
+  if (armType === 'leg') {
+    return createVerticalLegForNode1(rootComp, params);
+  } else if (armType === 'threaded') {
+    return createSingleThreadedArm(rootComp, params);
+  } else {
+    return createSingleSteppedArm(rootComp, params);
+  }
+}
+
+/**
+ * Erstellt einen 8 cm langen Arm mit Innengewinde M40x2.5 und Stufenbohrungen
+ * analog zu fusion/scripts/leg-with-thread/al-leg-with-thread.ts.
+ */
+function createSingleThreadedArm(
+  rootComp: adsk.fusion.Component,
+  params: ReturnType<typeof setupParameters>
+): adsk.fusion.BRepBody {
+  // 1. Grundkörper (Röhre OD 46mm, ID 40mm, Länge 80mm in -Z)
+  const armBody = createLongArm(rootComp, params);
+
+  // 2. Gewinde am Fußende (M40x2.5, H6, L: 20mm, Offset -0.1mm)
+  addLongArmThread(rootComp, armBody, params);
+
+  // 3. Rohr aufbohren (von -60mm Richtung Ursprung für 27.5 mm mit 41mm Durchmesser)
+  boreOutLongArm(rootComp, armBody, params);
+
+  // 4. Zweites Loch vom Ursprung aufbohren (Länge: 32.50 mm, Durchmesser: 40.025 mm in -Z)
+  boreOutFromOrigin(rootComp, armBody);
+
+  return armBody;
 }
 
 /**
@@ -399,9 +450,6 @@ function addShortArmHoles(
     const sketch = sketches.add(face);
 
     // 3. Zentrischen Kreis erstellen
-    // Da die Skizze auf der Fläche liegt, ist (0,0,0) in Skizzenkoordinaten das Zentrum der Fläche,
-    // falls die Fläche kreisförmig ist und Fusion das so ausrichtet.
-    // Sicherer ist es, den Mittelpunkt der Geometrie zu nehmen.
     sketch.sketchCurves.sketchCircles.addByCenterRadius(
       adsk.core.Point3D.create(0, 0, 0),
       holeDiameterParam.value / 2.0
@@ -410,8 +458,6 @@ function addShortArmHoles(
     // 4. Extrudieren mit -40mm (Schnitt-Operation)
     if (sketch.profiles.count === 0) continue;
 
-    // Wir suchen das Profil mit der kleinsten Fläche (den inneren Kreis)
-    // Wir vergleichen die Fläche mit der erwarteten Fläche des Kreises (PI * r^2)
     const expectedArea = Math.PI * Math.pow(holeDiameterParam.value / 2.0, 2);
     let holeProfile = sketch.profiles.item(0);
     let minDiff = Math.abs(holeProfile.areaProperties().area - expectedArea);
@@ -433,11 +479,11 @@ function addShortArmHoles(
 }
 
 /**
- * Erstellt ein Innengewinde am Fussende der leeren Röhre des grossen (langen) Arms.
- * Aufgabe: M40x2.5, H6, rechts, Länge: 20mm, plus Toleranzweite -0.1mm.
+ * Erstellt ein Innengewinde am Fussende des 8cm Arms.
+ * M40x2.5, H6, rechts, Länge: 20mm, plus Toleranzweite -0.1mm.
  *
  * @param rootComp Die Wurzelkomponente des Designs.
- * @param armBody Der kombinierte Tetrapod-Körper.
+ * @param armBody Der Arm-Körper.
  * @param params Die Benutzerparameter.
  */
 function addLongArmThread(
@@ -463,7 +509,7 @@ function addLongArmThread(
         const centerX = (bbox.minPoint.x + bbox.maxPoint.x) / 2.0;
         const centerY = (bbox.minPoint.y + bbox.maxPoint.y) / 2.0;
 
-        // Positions-Check (untere Hälfte des Tetrapoden und zentrisch zur Z-Achse)
+        // Positions-Check (zentrisch zur Z-Achse und tief in -Z)
         if (bbox.minPoint.z < -2.0 && Math.abs(centerX) < 0.1 && Math.abs(centerY) < 0.1) {
           targetFace = face;
           break;
@@ -477,65 +523,62 @@ function addLongArmThread(
     return;
   }
 
-  // // 2. Gewinde-Parameter definieren (M40x2.5, H6)
-  // const threadType = "ISO Metric Profile";
-  // const designator = "M40x2.5";
-  // const threadClass = "6H";
-  //
-  // const threadInfo = threadFeatures.createThreadInfo(true, threadType, designator, threadClass);
-  //
-  // // 3. Thread-Feature erstellen
-  // const threadInput = threadFeatures.createInput(targetFace, threadInfo);
-  // threadInput.isFullLength = false;
-  // threadInput.isModeled = true; // Modelliert für die physische Toleranzanpassung
-  //
-  // // Dynamische Berechnung des Offsets am Fussende
-  // const bbox = targetFace.boundingBox;
-  // const faceHeight = Math.abs(bbox.maxPoint.z - bbox.minPoint.z);
-  // const threadLengthCm = 2.0; // 20mm
-  // let offsetCm = faceHeight - threadLengthCm;
-  // if (offsetCm < 0) offsetCm = 0;
-  //
-  // threadInput.threadOffset = adsk.core.ValueInput.createByReal(offsetCm);
-  // threadInput.threadLength = adsk.core.ValueInput.createByReal(threadLengthCm);
-  //
-  // const threadFeature = threadFeatures.add(threadInput);
-  // if (!threadFeature) {
-  //   if (ui) ui.messageBox("Fehler beim Erstellen des Gewinde-Features.");
-  //   return;
-  // }
-  //
-  // // 4. Gewinde weiten (Toleranzberücksichtigung durch Drücken/Ziehen)
-  // const facesToOffset: adsk.fusion.BRepFace[] = [];
-  // for (let i = 0; i < threadFeature.faces.count; i++) {
-  //   const f = threadFeature.faces.item(i);
-  //   if (f) {
-  //     facesToOffset.push(f);
-  //   }
-  // }
-  //
-  // if (facesToOffset.length > 0) {
-  //   const offsetFeatures = features.offsetFacesFeatures;
-  //   const offsetInput = offsetFeatures.createInput(
-  //     facesToOffset,
-  //     adsk.core.ValueInput.createByString("-0.1mm")
-  //   );
-  //   if (offsetInput) {
-  //     offsetFeatures.add(offsetInput);
-  //   }
-  // }
+  // 2. Gewinde-Parameter definieren (M40x2.5, H6)
+  const threadType = "ISO Metric Profile";
+  const designator = "M40x2.5";
+  const threadClass = "6H";
+
+  const threadInfo = threadFeatures.createThreadInfo(true, threadType, designator, threadClass);
+
+  // 3. Thread-Feature erstellen
+  const threadInput = threadFeatures.createInput(targetFace, threadInfo);
+  threadInput.isFullLength = false;
+  threadInput.isModeled = true; // Modelliert für die physische Toleranzanpassung
+
+  // Terminales Gewinde direkt am äußeren Armende (Z = -80mm bis -60mm)
+  const threadLengthCm = 2.0; // 20mm
+  threadInput.threadOffset = adsk.core.ValueInput.createByReal(0.0);
+  threadInput.threadLength = adsk.core.ValueInput.createByReal(threadLengthCm);
+
+  const threadFeature = threadFeatures.add(threadInput);
+  if (!threadFeature) {
+    if (ui) ui.messageBox("Fehler beim Erstellen des Gewinde-Features.");
+    return;
+  }
+
+  // 4. Gewinde weiten (Toleranzberücksichtigung durch Drücken/Ziehen)
+  const facesToOffset: adsk.fusion.BRepFace[] = [];
+  for (let i = 0; i < threadFeature.faces.count; i++) {
+    const f = threadFeature.faces.item(i);
+    if (f) {
+      facesToOffset.push(f);
+    }
+  }
+
+  if (facesToOffset.length > 0) {
+    const offsetFeatures = features.offsetFacesFeatures;
+    const offsetInput = offsetFeatures.createInput(
+      facesToOffset,
+      adsk.core.ValueInput.createByString("-0.1mm")
+    );
+    if (offsetInput) {
+      offsetFeatures.add(offsetInput);
+    }
+  }
 }
 
 /**
  * Bohrt das restliche Rohr des langen Arms vom Gewinde bis zum Ursprung auf.
- * Ziel: 41mm Durchmesser, Tiefe -60mm ab 60mm vom Zentrum.
+ * Ziel: 41mm Durchmesser, Tiefe 27.5mm ab 60mm vom Zentrum.
  *
  * @param rootComp Die Wurzelkomponente des Designs.
+ * @param armBody Der Arm-Körper.
  * @param params Die Benutzerparameter.
  */
 function boreOutLongArm(
   rootComp: adsk.fusion.Component,
-  params: ReturnType<typeof setupParameters>
+  armBody: adsk.fusion.BRepBody,
+  _params: ReturnType<typeof setupParameters>
 ): void {
   const constructionPlanes = rootComp.constructionPlanes;
   const planeInput = constructionPlanes.createInput();
@@ -548,7 +591,7 @@ function boreOutLongArm(
   const sketches = rootComp.sketches;
   const sketch = sketches.add(offsetPlane);
 
-  // Kreis mit 41mm Durchmesser (Radius 20.05 cm)
+  // Kreis mit 41mm Durchmesser (Radius 2.05 cm)
   const diameterCm = 4.1;
   sketch.sketchCurves.sketchCircles.addByCenterRadius(
     adsk.core.Point3D.create(0, 0, 0),
@@ -558,10 +601,44 @@ function boreOutLongArm(
   if (sketch.profiles.count === 0) return;
   const profile = sketch.profiles.item(0);
 
-  // Extrusion (Cut) 60mm nach innen (Richtung Ursprung)
+  // Extrusion (Cut) 27.5mm nach innen (Richtung Ursprung)
   const extrudeFeatures = rootComp.features.extrudeFeatures;
   const extInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
-  extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(6.0));
+  extInput.participantBodies = [armBody];
+  extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(2.75));
+
+  extrudeFeatures.add(extInput);
+}
+
+/**
+ * Bohrt das zweite Loch vom Ursprung in Richtung der Z-Achse auf.
+ * Ziel: 40.025mm Durchmesser, Länge 32.50mm in Richtung der Z-Achse (in das Rohr).
+ *
+ * @param rootComp Die Wurzelkomponente des Designs.
+ * @param armBody Der Arm-Körper.
+ */
+function boreOutFromOrigin(
+  rootComp: adsk.fusion.Component,
+  armBody: adsk.fusion.BRepBody
+): void {
+  const sketches = rootComp.sketches;
+  const sketch = sketches.add(rootComp.xYConstructionPlane);
+
+  // Kreis mit 40.025mm Durchmesser (Radius: 2.0025 cm)
+  const diameterCm = 4.005;
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(
+    adsk.core.Point3D.create(0, 0, 0),
+    diameterCm / 2.0
+  );
+
+  if (sketch.profiles.count === 0) return;
+  const profile = sketch.profiles.item(0);
+
+  // Extrusion (Cut) 32.50mm entlang der Z-Achse in das Rohr (-Z Richtung)
+  const extrudeFeatures = rootComp.features.extrudeFeatures;
+  const extInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+  extInput.participantBodies = [armBody];
+  extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(-3.25));
 
   extrudeFeatures.add(extInput);
 }
