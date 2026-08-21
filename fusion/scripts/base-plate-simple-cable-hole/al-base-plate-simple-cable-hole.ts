@@ -52,23 +52,8 @@ export function run(_context: string): void {
         // 9. Unterseite bündig schneiden (Überstand unterhalb z=0 abtrennen)
         trimBottomFlush(rootComp, params);
 
-        // 10. Einfacher Kabelkanal (5mm Loch mit 0.3mm Abfasungen)
-        // createSimpleCableHole(rootComp, params, baseBody);
-        /*
-        TODO
-        # konstuiere den Kabelkanal wie folgt:
-
-        a) kreiere eine Versatzebene zur yz-Ebene, Abstand 70mm
-        b) erzeuge auf neuer Versatzebene eine Skizze
-        c) konstuiere einen Kreis:
-           - durchmesser 5mm
-           - Mittelpunkt liegt auf z-Achse und 8mm über der xy-Ebene. (0,0, 8.0mm)
-        d) Mache Extrusion:
-           -  Kreis
-           - Richtung: Symmetrisch
-           - Abstand: 16mm
-           - Verjüngung : 0
-         */
+        // 10. Einfacher Kabelkanal (Versatzebene 70mm, 5mm Loch bei z=8mm, symmetrische Extrusion 16mm, 0.3mm Abfasung)
+        createSimpleCableHole(rootComp, params, baseBody);
 
         console.log('Erfolgreich generiert!');
 
@@ -107,6 +92,14 @@ function setupParameters(design: adsk.fusion.Design) {
             if (!p) {
                 throw new Error(`Parameter '${name}' konnte nicht erstellt werden.`);
             }
+        } else {
+            if (p.value === 0 && valueStr !== '0' && valueStr !== '0mm' && valueStr !== '0.0mm') {
+                try {
+                    p.expression = valueStr;
+                } catch (_err) {
+                    // Parameter konnte nicht aktualisiert werden
+                }
+            }
         }
         return p;
     }
@@ -123,8 +116,9 @@ function setupParameters(design: adsk.fusion.Design) {
         legAngle: getOrCreateParam('leg_angle', '120', 'degree', 'Winkel des Beines zur XY-Ebene (Innenwinkel an der Platte)'),
         legOffset: getOrCreateParam('leg_offset', '45mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
         legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante: Bein und Platte (wird bei Solver-Problemen automatisch verkleinert)'),
+        cableHoleOffset: getOrCreateParam('cable_hole_offset', '70mm', 'mm', 'Versatz der Kabelkanal-Konstruktionsebene zur YZ-Ebene'),
         cableHoleDiameter: getOrCreateParam('cable_hole_diameter', '5mm', 'mm', 'Durchmesser des Kabelkanallochs'),
-        cableHoleHeight: getOrCreateParam('cable_hole_height', '2.5mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite (2.5mm = Unterkante liegt auf XY-Ebene z=0)'),
+        cableHoleHeight: getOrCreateParam('cable_hole_height', '8mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite (8.0mm)'),
         cableHoleChamfer: getOrCreateParam('cable_hole_chamfer', '0.3mm', 'mm', 'Abfasung der Lochkanten des Kabelkanals')
     };
 }
@@ -1018,32 +1012,42 @@ function trimBottomFlush(rootComp: adsk.fusion.Component, params: Params): void 
 }
 
 /**
- * 10) Einfacher Kabelkanal (Bohrung an der Unterseite):
- *     - Horizontales Loch (Durchmesser cableHoleDiameter, z. B. 5mm) an der Seite der Basis-Platte (x < 0)
- *       auf der XY-Ebene (Höhe cableHoleHeight = 2.5mm, sodass die Unterkante des Lochs direkt auf der XY-Ebene z=0 liegt).
- *     - Geht vom Außenrand der Basis-Platte bis zum großen inneren Loch.
- *     - Abfasung (cableHoleChamfer, z. B. 0.3mm) an den Lochkanten.
+ * 10) Einfacher Kabelkanal:
+ *     a) Versatzebene zur YZ-Ebene mit Abstand 70mm
+ *     b) Skizze auf der neuen Versatzebene
+ *     c) Kreis (Durchmesser 5mm) mit Mittelpunkt auf Z-Achse 8mm über XY-Ebene (0, 0, 8.0mm)
+ *     d) Extrusion (Cut): Symmetrisch, Abstand 16mm, Verjüngung 0
+ *     e) Abfasung (cableHoleChamfer = 0.3mm) an den Lochkanten
  */
 function createSimpleCableHole(
     rootComp: adsk.fusion.Component,
     params: Params,
-    body: adsk.fusion.BRepBody
+    _body: adsk.fusion.BRepBody
 ): void {
-    const holeRadius = params.cableHoleDiameter.value / 2.0;
-    const holeHeight = params.cableHoleHeight.value;
-    const chamferVal = params.cableHoleChamfer.value;
+    // a) Versatzebene zur YZ-Ebene mit Abstand 70mm (7.0 cm) - exakt wie in al-leg-with-thread.ts (Zeilen 244-250)
+    const constructionPlanes = rootComp.constructionPlanes;
+    const planeInput = constructionPlanes.createInput();
+    const offsetValue = adsk.core.ValueInput.createByReal(7.0); // 70mm = 7.0 cm
+    planeInput.setByOffset(rootComp.yZConstructionPlane, offsetValue);
+    const offsetPlane = constructionPlanes.add(planeInput);
+    if (!offsetPlane) {
+        throw new Error('Versatzebene für den Kabelkanal konnte nicht erstellt werden.');
+    }
 
-    // Skizze auf der YZ-Konstruktionsebene (x = 0)
-    const sketch = rootComp.sketches.add(rootComp.yZConstructionPlane);
+    // b) Skizze auf neuer Versatzebene erzeugen
+    const sketches = rootComp.sketches;
+    const sketch = sketches.add(offsetPlane);
     if (!sketch) {
-        throw new Error('Skizze für den einfachen Kabelkanal konnte nicht erstellt werden.');
+        throw new Error('Skizze auf Versatzebene für den Kabelkanal konnte nicht erstellt werden.');
     }
 
-    // Loch-Mittelpunkt im Skizzenraum der YZ-Ebene: (y = 0, z = holeHeight)
-    const centerPoint = adsk.core.Point3D.create(0, holeHeight, 0);
-    if (!centerPoint) {
-        throw new Error('Mittelpunkt für das Kabelkanal-Loch konnte nicht erstellt werden.');
-    }
+    // c) Kreis konstruieren (Durchmesser cableHoleDiameter = 5mm, Mittelpunkt bei 3D (70mm, 0, 8mm))
+    const holeRadius = params.cableHoleDiameter.value / 2.0; // cm (0.25 cm = 2.5mm)
+    const holeHeight = params.cableHoleHeight.value; // cm (0.8 cm = 8.0mm)
+    const holeOffset = params.cableHoleOffset.value; // cm (7.0 cm = 70.0mm)
+    // 3D-Modellpunkt auf der Versatzebene bei x=70mm, y=0, z=8mm:
+    const center3D = adsk.core.Point3D.create(holeOffset, 0, holeHeight);
+    const centerPoint = sketch.modelToSketchSpace(center3D);
 
     sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, holeRadius);
 
@@ -1055,92 +1059,52 @@ function createSimpleCableHole(
         throw new Error('Profil für das Kabelkanal-Loch konnte nicht gelesen werden.');
     }
 
-    // Extrusion Cut in negative X-Richtung (vom Ursprung x=0 nach außen x = -basePlateDiameter / 2.0)
+    // d) Extrusion Cut: Symmetrisch, Abstand 16mm, Verjüngung 0
     const extrudeFeatures = rootComp.features.extrudeFeatures;
     const cutInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
     if (!cutInput) {
-        throw new Error('Cut-Input für den einfachen Kabelkanal konnte nicht erstellt werden.');
+        throw new Error('Cut-Input für den Kabelkanal konnte nicht erstellt werden.');
     }
 
-    // Cut um die Hälfte des Plattendurchmessers + 1cm Sicherheitsabstand in negative X-Richtung
-    const cutDistance = params.basePlateDiameter.value / 2.0 + 1.0;
-    const distVal = adsk.core.ValueInput.createByReal(-1.0 * cutDistance);
-    if (!distVal) {
-        throw new Error('Distanzwert für den Kabelkanal-Schnitt konnte nicht initialisiert werden.');
-    }
-    cutInput.setDistanceExtent(false, distVal);
+    const distVal = adsk.core.ValueInput.createByReal(1.6); // 16mm = 1.6 cm
+    cutInput.setSymmetricExtent(distVal, false);
 
     const cutFeature = extrudeFeatures.add(cutInput);
     if (!cutFeature) {
-        throw new Error('Kabelkanal-Loch konnte nicht geschnitten werden.');
+        throw new Error('Kabelkanal-Loch konnte nicht extrudiert werden.');
     }
 
-    // Kanten des Lochs für die Abfasung suchen
-    const chamferEdges: adsk.fusion.BRepEdge[] = [];
-
-    // 1. Zylinderfläche der 5mm Bohrung im Körper suchen (auf der negativen X-Seite)
-    for (let i = 0; i < body.faces.count; i++) {
-        const face = body.faces.item(i);
-        if (!face || face.geometry.surfaceType !== adsk.core.SurfaceTypes.CylinderSurfaceType) {
-            continue;
-        }
-        const surf = face.geometry as unknown as {
-            radius?: number;
-            origin?: { x: number, y: number, z: number };
-            axis?: { direction?: { x: number, y: number, z: number } };
-        };
-
-        if (surf.radius !== undefined && Math.abs(surf.radius - holeRadius) < TOL / 10.0) {
-            const axisDir = surf.axis ? surf.axis.direction : null;
-            if (axisDir && Math.abs(Math.abs(axisDir.x) - 1.0) < 0.05) {
-                if (surf.origin && Math.abs(surf.origin.z - holeHeight) < TOL && surf.origin.x < 0) {
-                    for (let e = 0; e < face.edges.count; e++) {
-                        const edge = face.edges.item(e);
-                        if (edge && !chamferEdges.includes(edge)) {
-                            chamferEdges.push(edge);
-                        }
+    // e) Abfasung der Lochkanten mit cableHoleChamfer (0.3mm)
+    const chamferVal = params.cableHoleChamfer.value;
+    if (chamferVal > 0 && cutFeature.sideFaces) {
+        const chamferEdges: adsk.fusion.BRepEdge[] = [];
+        for (let f = 0; f < cutFeature.sideFaces.count; f++) {
+            const face = cutFeature.sideFaces.item(f);
+            if (face) {
+                for (let e = 0; e < face.edges.count; e++) {
+                    const edge = face.edges.item(e);
+                    if (edge && !chamferEdges.includes(edge)) {
+                        chamferEdges.push(edge);
                     }
                 }
             }
         }
-    }
 
-    // 2. Fallback über Geometriekriterien der Kanten (negative X-Seite)
-    if (chamferEdges.length < 2) {
-        const expectedLength = 2.0 * Math.PI * holeRadius;
-        for (let i = 0; i < body.edges.count; i++) {
-            const edge = body.edges.item(i);
-            if (!edge || chamferEdges.includes(edge)) {
-                continue;
-            }
-            const bb = edge.boundingBox;
-            if (!bb || bb.maxPoint.x > 0.0) {
-                continue;
-            }
-            const yMid = (bb.minPoint.y + bb.maxPoint.y) / 2.0;
-            const zMid = (bb.minPoint.z + bb.maxPoint.z) / 2.0;
-            if (Math.abs(yMid) < holeRadius * 2.0 && Math.abs(zMid - holeHeight) < holeRadius * 2.0) {
-                if (Math.abs(edge.length - expectedLength) <= expectedLength * 0.35) {
-                    chamferEdges.push(edge);
+        if (chamferEdges.length > 0) {
+            const chamferFeatures = rootComp.features.chamferFeatures;
+            const chamferInput = chamferFeatures.createInput2();
+            if (chamferInput) {
+                const edgeColl = adsk.core.ObjectCollection.create();
+                for (const edge of chamferEdges) {
+                    edgeColl.add(edge);
                 }
+                chamferInput.chamferEdgeSets.addEqualDistanceChamferEdgeSet(
+                    edgeColl,
+                    adsk.core.ValueInput.createByString('cable_hole_chamfer')!,
+                    true
+                );
+                chamferFeatures.add(chamferInput);
             }
-        }
-    }
-
-    if (chamferEdges.length > 0 && chamferVal > 0) {
-        const chamferFeatures = rootComp.features.chamferFeatures;
-        const chamferInput = chamferFeatures.createInput2();
-        if (chamferInput) {
-            const edgeColl = adsk.core.ObjectCollection.create();
-            for (const edge of chamferEdges) {
-                edgeColl.add(edge);
-            }
-            chamferInput.chamferEdgeSets.addEqualDistanceChamferEdgeSet(
-                edgeColl,
-                adsk.core.ValueInput.createByString('cable_hole_chamfer')!,
-                true
-            );
-            chamferFeatures.add(chamferInput);
         }
     }
 }
