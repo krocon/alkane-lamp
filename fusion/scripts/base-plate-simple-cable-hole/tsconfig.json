@@ -1,0 +1,10 @@
+{
+	"extends":	"../../../tsconfig.json",
+	"compilerOptions":	{
+		"paths":	{
+			"@adsk/*":	["/Users/marckronberg/Library/Application Support/Autodesk/webdeploy/production/5b508d94493ed3344e38945ffca1b03b713ee401/Autodesk Fusion.app/Contents/API/TypeScript/@adsk/*"],
+			"fs":	["/Users/marckronberg/Library/Application Support/Autodesk/webdeploy/production/5b508d94493ed3344e38945ffca1b03b713ee401/Autodesk Fusion.app/Contents/API/TypeScript/fs/index.d.ts"],
+			"fs/promises":	["/Users/marckronberg/Library/Application Support/Autodesk/webdeploy/production/5b508d94493ed3344e38945ffca1b03b713ee401/Autodesk Fusion.app/Contents/API/TypeScript/fs/promises.d.ts"]
+		}
+	}
+}
