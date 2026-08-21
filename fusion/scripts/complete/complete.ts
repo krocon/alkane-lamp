@@ -22,18 +22,30 @@ export function run(_context: string): void {
     // 1. Parameter definieren
     const params = setupParameters(design);
 
-    // 2. Tetrapod erzeugen (Basisgeometrie aus 4 Armen)
+    // 2. Ersten Tetrapod (Node 1) im Ursprung (0,0,0) erzeugen
     const targetBody = createTetrapod(rootComp, params);
-    targetBody.name = 'Node';
+    targetBody.name = 'Node_1';
 
-    // 3. Kugel aus dem Zentrum ausschneiden (Zentralknoten hohl machen)
+    // 3. Kugel aus dem Zentrum von Node 1 ausschneiden (Zentralknoten hohl machen)
     cutInnerSphere(rootComp, params.innerBallDiameter);
 
-    // 4. Gewinde am Fussende des langen Arms erstellen
+    // 4. Gewinde am Fussende des langen Arms von Node 1 erstellen
     addLongArmThread(rootComp, targetBody, params);
 
-    // 5. Rohr aufbohren (vom Gewinde Richtung Ursprung für 27.5 mm)
+    // 5. Rohr aufbohren für Node 1
     boreOutLongArm(rootComp, params);
+
+    // 6. Zweiten Tetrapod (Node 2) erzeugen
+    const node2 = createTetrapod(rootComp, params);
+    node2.name = 'Node_2';
+
+    // Kugel, Gewinde und Bohrung für Node 2
+    cutInnerSphere(rootComp, params.innerBallDiameter);
+    addLongArmThread(rootComp, node2, params);
+    boreOutLongArm(rootComp, params);
+
+    // 7. Node 2 positionieren (Zentrum in XZ-Ebene, 8 cm Abstand, Achse ausgerichtet)
+    positionSecondTetrapod(rootComp, node2);
 
     console.log('Erfolgreich generiert!');
 
@@ -533,4 +545,57 @@ function boreOutLongArm(
   extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(6.0));
 
   extrudeFeatures.add(extInput);
+}
+
+/**
+ * Positioniert den 2. Tetrapod (Node 2) gemäß folgenden mathematischen Anforderungen:
+ * 1. Zentrum liegt in der xz-Ebene (y = 0).
+ * 2. 2 Arme (bzw. deren Mittelachsen) des neuen Tetrapods liegen in der xz-Ebene.
+ * 3. Die Mittelachse eines Arms des neuen Tetrapods ist eine Verlängerung der Mittelachse eines Arms des alten.
+ * 4. Der Abstand der beiden Zentren (Schwerpunkte) beträgt 8 cm (8.0 cm = 80 mm).
+ *
+ * @param rootComp Die Wurzelkomponente des Designs.
+ * @param node2 Der BRepBody des 2. Tetrapods.
+ */
+function positionSecondTetrapod(
+  rootComp: adsk.fusion.Component,
+  node2: adsk.fusion.BRepBody
+): void {
+  // Tetraedrischer Bindungswinkel theta = arccos(-1/3) ≈ 109.47122°
+  const tetraAngle = Math.acos(-1.0 / 3.0); // Radian
+
+  // Einheitsvektor des kurzen Arms (Arm 1) im xz-Raum von Tetrapod 1:
+  // Arm 1 in createTetrapod liegt nach Rotation um Y-Achse in der xz-Ebene (Y=0)
+  // v1 = (-sin(tetraAngle), 0, -cos(tetraAngle)) = (-2*sqrt(2)/3, 0, 1/3)
+  const dirX = -Math.sin(tetraAngle); // -2 * sqrt(2) / 3 ≈ -0.942809
+  const dirY = 0.0;
+  const dirZ = -Math.cos(tetraAngle); // 1 / 3 ≈ 0.333333
+
+  // 4. Abstand der beiden Zentren: 8 cm
+  const distanceCm = 8.0;
+
+  // 1. Zentrum des 2. Tetrapods liegt in der xz-Ebene (y = 0)
+  const center2 = adsk.core.Point3D.create(
+    distanceCm * dirX,
+    dirY,
+    distanceCm * dirZ
+  );
+
+  // 2. & 3. Ausrichtung & Transformationsmatrix:
+  // 180° Rotation um die Y-Achse ausführen, damit ein Arm von Node 2 entlang der Achsverlängerung (Richtung Node 1) zeigt.
+  // Dadurch liegen Arm 0 (entlang +Z) und Arm 1 (entlang -v1) von Node 2 beide in der xz-Ebene.
+  const transformMatrix = adsk.core.Matrix3D.create();
+  const xAxis = adsk.core.Vector3D.create(-1, 0, 0);
+  const yAxis = adsk.core.Vector3D.create(0, 1, 0);
+  const zAxis = adsk.core.Vector3D.create(0, 0, -1);
+  transformMatrix.setWithCoordinateSystem(center2, xAxis, yAxis, zAxis);
+
+  // Verschiebung des Körpers in Fusion 360 ausführen
+  const moveFeatures = rootComp.features.moveFeatures;
+  const moveCollection = adsk.core.ObjectCollection.create();
+  moveCollection.add(node2);
+
+  const moveInput = moveFeatures.createInput2(moveCollection);
+  moveInput.defineAsFreeMove(transformMatrix);
+  moveFeatures.add(moveInput);
 }
