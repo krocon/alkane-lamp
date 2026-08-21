@@ -49,6 +49,10 @@ export function run(_context: string): void {
     // Node 3 positionieren (Zentrum in XZ-Ebene, 8 cm Abstand zu Node 2, Achsenverlängerung)
     positionThirdTetrapod(rootComp, node3, center2);
 
+    // 6. Verbindungsröhren (ID 31.5mm, OD 46mm, Länge 8cm) erzeugen und mit den Tetrapoden verschmelzen
+    createConnectionTube1To2(rootComp, params, targetBody, node2);
+    createConnectionTube2To3(rootComp, params, targetBody, node3, center2);
+
     console.log('Erfolgreich generiert!');
 
   } catch (e) {
@@ -638,4 +642,155 @@ function positionThirdTetrapod(
   moveFeatures.add(moveInput);
 
   return center3;
+}
+
+/**
+ * Erzeugt einen Röhren-Körper im Ursprung (0,0,0) auf der XY-Ebene.
+ *
+ * @param rootComp Die Wurzelkomponente des Designs.
+ * @param params Die Benutzerparameter.
+ * @param lengthCm Die Länge der Röhre in cm (z.B. 8.0 für 80mm).
+ * @param negativeDirection Wenn true, wird in negative Z-Richtung extrudiert, sonst in positive Z-Richtung.
+ * @returns Der erzeugte Röhren-BRepBody.
+ */
+function createTubeBody(
+  rootComp: adsk.fusion.Component,
+  params: ReturnType<typeof setupParameters>,
+  lengthCm: number,
+  negativeDirection: boolean = false
+): adsk.fusion.BRepBody {
+  const sketches = rootComp.sketches;
+  const features = rootComp.features;
+  const extrudeFeatures = features.extrudeFeatures;
+
+  const sketch = sketches.add(rootComp.xYConstructionPlane);
+  const center = adsk.core.Point3D.create(0, 0, 0);
+
+  // Kreise für Außen- (46mm) und Innendurchmesser (31.5mm) zeichnen
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.armOuterDiameter.value / 2.0);
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.holeDiameter.value / 2.0);
+
+  let ringProfile: adsk.fusion.Profile | null = null;
+
+  for (let i = 0; i < sketch.profiles.count; i++) {
+    const prof = sketch.profiles.item(i);
+    if (prof.profileLoops.count === 2) {
+      ringProfile = prof;
+      break;
+    }
+  }
+
+  if (!ringProfile) {
+    const holeArea = Math.PI * Math.pow(params.holeDiameter.value / 2.0, 2);
+    for (let i = 0; i < sketch.profiles.count; i++) {
+      const prof = sketch.profiles.item(i);
+      if (Math.abs(prof.areaProperties().area - holeArea) > 0.1) {
+        ringProfile = prof;
+        break;
+      }
+    }
+  }
+
+  if (!ringProfile) {
+    ringProfile = sketch.profiles.item(0);
+  }
+
+  const extInput = extrudeFeatures.createInput(
+    ringProfile,
+    adsk.fusion.FeatureOperations.NewBodyFeatureOperation
+  );
+
+  const valStr = negativeDirection ? `-${lengthCm}cm` : `${lengthCm}cm`;
+  extInput.setDistanceExtent(false, adsk.core.ValueInput.createByString(valStr));
+
+  const extrudeFeature = extrudeFeatures.add(extInput);
+  return extrudeFeature.bodies.item(0);
+}
+
+/**
+ * Erzeugt die Verbindungsröhre zwischen Node 1 und Node 2:
+ * Länge 45 mm (4.5 cm), in der Mitte der beiden Arme platziert (von 1.75 cm bis 6.25 cm vom Zentrum).
+ */
+function createConnectionTube1To2(
+  rootComp: adsk.fusion.Component,
+  params: ReturnType<typeof setupParameters>,
+  node1: adsk.fusion.BRepBody,
+  node2: adsk.fusion.BRepBody
+): void {
+  // 1. Röhre der Länge 4.5 cm (45mm) im Ursprung in -Z Richtung erzeugen
+  const tubeLengthCm = 4.5;
+  const tubeBody = createTubeBody(rootComp, params, tubeLengthCm, true);
+
+  const tetraAngle = Math.acos(-1.0 / 3.0);
+  const dirX = -Math.sin(tetraAngle); // -2*sqrt(2)/3
+  const dirY = 0.0;
+  const dirZ = -Math.cos(tetraAngle); // 1/3
+
+  // Versatz, damit die 4.5 cm lange Röhre mittig liegt (von 1.75 cm bis 6.25 cm entlang der 8 cm Achse)
+  const offsetCm = 1.75;
+  const shiftVec = adsk.core.Vector3D.create(offsetCm * dirX, dirY, offsetCm * dirZ);
+
+  // 2. Röhre rotieren (109.47° um Y-Achse) und um offsetCm entlang der Achse verschieben
+  const transformMatrix = adsk.core.Matrix3D.create();
+  transformMatrix.setToRotation(tetraAngle, adsk.core.Vector3D.create(0, 1, 0), adsk.core.Point3D.create(0, 0, 0));
+  const transMatrix = adsk.core.Matrix3D.create();
+  transMatrix.translation = shiftVec;
+  transformMatrix.transformBy(transMatrix);
+
+  const moveFeats = rootComp.features.moveFeatures;
+  const moveColl = adsk.core.ObjectCollection.create();
+  moveColl.add(tubeBody);
+  const moveInput = moveFeats.createInput2(moveColl);
+  moveInput.defineAsFreeMove(transformMatrix);
+  moveFeats.add(moveInput);
+
+  // 3. Röhre mit Node 1 und Node 2 verschmelzen (Combine Join)
+  const combineFeatures = rootComp.features.combineFeatures;
+  const toolColl = adsk.core.ObjectCollection.create();
+  toolColl.add(tubeBody);
+  toolColl.add(node2);
+  const combineInput = combineFeatures.createInput(node1, toolColl);
+  combineInput.operation = adsk.fusion.FeatureOperations.JoinFeatureOperation;
+  combineFeatures.add(combineInput);
+}
+
+/**
+ * Erzeugt die Verbindungsröhre zwischen Node 2 und Node 3:
+ * Länge 45 mm (4.5 cm), in der Mitte der beiden Arme platziert (von 1.75 cm bis 6.25 cm von C2).
+ */
+function createConnectionTube2To3(
+  rootComp: adsk.fusion.Component,
+  params: ReturnType<typeof setupParameters>,
+  node1: adsk.fusion.BRepBody,
+  node3: adsk.fusion.BRepBody,
+  center2: adsk.core.Point3D
+): void {
+  // 1. Röhre der Länge 4.5 cm (45mm) im Ursprung in +Z Richtung erzeugen
+  const tubeLengthCm = 4.5;
+  const tubeBody = createTubeBody(rootComp, params, tubeLengthCm, false);
+
+  // 2. Röhre zum Mittelbereich (C2 + 1.75 cm entlang +Z) verschieben
+  const offsetCm = 1.75;
+  const transformMatrix = adsk.core.Matrix3D.create();
+  transformMatrix.translation = adsk.core.Vector3D.create(
+    center2.x,
+    0,
+    center2.z + offsetCm
+  );
+
+  const moveFeats = rootComp.features.moveFeatures;
+  const moveColl = adsk.core.ObjectCollection.create();
+  moveColl.add(tubeBody);
+  const moveInput = moveFeats.createInput2(moveColl);
+  moveInput.defineAsFreeMove(transformMatrix);
+  moveFeats.add(moveInput);
+
+  // 3. Röhre und Node 3 mit dem Gesamt-Körper (node1) verschmelzen
+  const combineFeatures = rootComp.features.combineFeatures;
+  const toolColl = adsk.core.ObjectCollection.create();
+  toolColl.add(tubeBody);
+  toolColl.add(node3);
+  const combineInput = combineFeatures.createInput(node1, toolColl);
+  combineInput.operation = adsk.fusion.FeatureOperations.JoinFeatureOperation;
+  combineFeatures.add(combineInput);
 }
