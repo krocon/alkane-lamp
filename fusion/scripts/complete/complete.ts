@@ -22,30 +22,32 @@ export function run(_context: string): void {
     // 1. Parameter definieren
     const params = setupParameters(design);
 
-    // 2. Ersten Tetrapod (Node 1) im Ursprung (0,0,0) erzeugen
+    // 2. Ersten Tetrapod (Node 1) im Ursprung (0,0,0) erzeugen (nur kurze Arme)
     const targetBody = createTetrapod(rootComp, params);
     targetBody.name = 'Node_1';
 
     // 3. Kugel aus dem Zentrum von Node 1 ausschneiden (Zentralknoten hohl machen)
     cutInnerSphere(rootComp, params.innerBallDiameter);
 
-    // 4. Gewinde am Fussende des langen Arms von Node 1 erstellen
-    addLongArmThread(rootComp, targetBody, params);
-
-    // 5. Rohr aufbohren für Node 1
-    boreOutLongArm(rootComp, params);
-
-    // 6. Zweiten Tetrapod (Node 2) erzeugen
+    // 4. Zweiten Tetrapod (Node 2) erzeugen (nur kurze Arme)
     const node2 = createTetrapod(rootComp, params);
     node2.name = 'Node_2';
 
-    // Kugel, Gewinde und Bohrung für Node 2
+    // Kugel aus dem Zentrum von Node 2 ausschneiden
     cutInnerSphere(rootComp, params.innerBallDiameter);
-    addLongArmThread(rootComp, node2, params);
-    boreOutLongArm(rootComp, params);
 
-    // 7. Node 2 positionieren (Zentrum in XZ-Ebene, 8 cm Abstand, Achse ausgerichtet)
-    positionSecondTetrapod(rootComp, node2);
+    // Node 2 positionieren (Zentrum in XZ-Ebene, 8 cm Abstand zu Node 1)
+    const center2 = positionSecondTetrapod(rootComp, node2);
+
+    // 5. Dritten Tetrapod (Node 3) erzeugen (nur kurze Arme)
+    const node3 = createTetrapod(rootComp, params);
+    node3.name = 'Node_3';
+
+    // Kugel aus dem Zentrum von Node 3 ausschneiden
+    cutInnerSphere(rootComp, params.innerBallDiameter);
+
+    // Node 3 positionieren (Zentrum in XZ-Ebene, 8 cm Abstand zu Node 2, Achsenverlängerung)
+    positionThirdTetrapod(rootComp, node3, center2);
 
     console.log('Erfolgreich generiert!');
 
@@ -276,8 +278,8 @@ function createTetrapod(
 ): adsk.fusion.BRepBody {
   const features = rootComp.features;
 
-  // Erzeuge die beiden Grundtypen von Armen
-  const arm0Body = createLongArm(rootComp, params);
+  // Alle 4 Arme als kurze (gestufte) Arme erzeugen (kein langer Arm)
+  const arm0Body = createSingleSteppedArm(rootComp, params);
   const arm1Body = createSingleSteppedArm(rootComp, params);
 
   // Transformation: Kurzen Arm in den tetraedrischen Winkel rotieren
@@ -315,19 +317,17 @@ function createTetrapod(
   combineInput.operation = adsk.fusion.FeatureOperations.JoinFeatureOperation;
   combineFeatures.add(combineInput);
 
-  // 3 Bohrungen (Löcher) in den drei kurzen Armen erzeugen
-  // Jetzt auf dem verschmolzenen Körper (arm0Body)
+  // Bohrungen (Löcher) in die 4 kurzen Arme erzeugen
   addShortArmHoles(rootComp, arm0Body, params.holeDiameter);
 
   return arm0Body;
 }
 
 /**
- * Fügt Bohrungen in die drei kurzen Arme ein.
- * Realisiert durch eine Bohrung im ersten Arm und anschließende kreisförmige Anordnung des Features.
+ * Fügt Bohrungen in die kurzen Arme ein.
  *
  * @param rootComp Die Wurzelkomponente des Designs.
- * @param armBody Einer der kurzen Arme (Referenz für die Geometrie).
+ * @param armBody Der kombinierte Tetrapod-Körper.
  * @param holeDiameterParam Der Parameter für den Bohrungsdurchmesser.
  */
 function addShortArmHoles(
@@ -338,9 +338,7 @@ function addShortArmHoles(
   const sketches = rootComp.sketches;
   const features = rootComp.features;
 
-  // 1. Stirnflächen der kleinen Arme selektieren
-  // Wir suchen die 3 Planarflächen, die am weitesten vom Zentrum entfernt sind und NICHT der lange Arm sind
-  // Der lange Arm geht in -Z Richtung.
+  // 1. Stirnflächen aller 4 kurzen Arme selektieren
   const faces: adsk.fusion.BRepFace[] = [];
   const centerPoint = adsk.core.Point3D.create(0, 0, 0);
 
@@ -354,26 +352,23 @@ function addShortArmHoles(
         (bbox.minPoint.z + bbox.maxPoint.z) / 2
       );
 
-      // Nur Flächen betrachten, die deutlich über dem Ende des langen Arms liegen (Z > -1cm)
-      if (faceCenter.z > -1.0) {
-        const dist = faceCenter.distanceTo(centerPoint);
-        // Die Stirnflächen der kurzen Arme sind ca. 35mm (3.5cm) vom Zentrum entfernt
-        if (dist > 3.0) {
-          faces.push(face);
-        }
+      const dist = faceCenter.distanceTo(centerPoint);
+      // Die Stirnflächen der kurzen Arme sind ca. 35mm (3.5cm) vom Zentrum entfernt
+      if (dist > 3.0) {
+        faces.push(face);
       }
     }
   }
 
-  // Wir erwarten 3 Flächen. Falls die Logik oben mehr/weniger findet, sortieren wir nach Distanz.
+  // Wir erwarten 4 Stirnflächen für die 4 kurzen Arme
   faces.sort((a, b) => {
     const da = a.boundingBox.minPoint.distanceTo(centerPoint);
     const db = b.boundingBox.minPoint.distanceTo(centerPoint);
     return db - da;
   });
 
-  // Nur die Top 3 nehmen
-  const targetFaces = faces.slice(0, 3);
+  // Alle 4 Stirnflächen nehmen
+  const targetFaces = faces.slice(0, 4);
 
   for (const face of targetFaces) {
     // 2. Skizze auf der Stirnfläche erstellen
@@ -560,7 +555,7 @@ function boreOutLongArm(
 function positionSecondTetrapod(
   rootComp: adsk.fusion.Component,
   node2: adsk.fusion.BRepBody
-): void {
+): adsk.core.Point3D {
   // Tetraedrischer Bindungswinkel theta = arccos(-1/3) ≈ 109.47122°
   const tetraAngle = Math.acos(-1.0 / 3.0); // Radian
 
@@ -598,4 +593,49 @@ function positionSecondTetrapod(
   const moveInput = moveFeatures.createInput2(moveCollection);
   moveInput.defineAsFreeMove(transformMatrix);
   moveFeatures.add(moveInput);
+
+  return center2;
+}
+
+/**
+ * Positioniert den 3. Tetrapod (Node 3) gemäß folgenden mathematischen Anforderungen:
+ * 1. Zentrum liegt in der xz-Ebene (y = 0).
+ * 2. 2 Arme des neuen Tetrapods liegen in der xz-Ebene.
+ * 3. Die Mittelachse eines Arms von Node 3 ist eine Verlängerung der Mittelachse von Arm 0 des 2. Tetrapods.
+ * 4. Der Abstand des Zentrums von Node 3 zum Zentrum von Node 2 beträgt 8 cm (8.0 cm = 80 mm).
+ *
+ * @param rootComp Die Wurzelkomponente des Designs.
+ * @param node3 Der BRepBody des 3. Tetrapods.
+ * @param center2 Das Zentrum des 2. Tetrapods.
+ * @returns Das Zentrum (Point3D) von Node 3.
+ */
+function positionThirdTetrapod(
+  rootComp: adsk.fusion.Component,
+  node3: adsk.fusion.BRepBody,
+  center2: adsk.core.Point3D
+): adsk.core.Point3D {
+  // Arm 0 von Node 2 zeigt entlang der +Z-Achse (0, 0, 1).
+  // Zentrum von Node 3 liegt 8 cm entlang der +Z-Achse von Node 2:
+  const distanceCm = 8.0;
+  const center3 = adsk.core.Point3D.create(
+    center2.x,
+    0,
+    center2.z + distanceCm
+  );
+
+  // Transformationsmatrix für Node 3:
+  // Reine Translation nach center3. Dadurch zeigt Arm 0 von Node 3 entlang (0, 0, -1) zurück zu Node 2,
+  // und Arm 1 von Node 3 zeigt in der xz-Ebene (-sin(theta), 0, -cos(theta)).
+  const transformMatrix = adsk.core.Matrix3D.create();
+  transformMatrix.translation = adsk.core.Vector3D.create(center3.x, center3.y, center3.z);
+
+  const moveFeatures = rootComp.features.moveFeatures;
+  const moveCollection = adsk.core.ObjectCollection.create();
+  moveCollection.add(node3);
+
+  const moveInput = moveFeatures.createInput2(moveCollection);
+  moveInput.defineAsFreeMove(transformMatrix);
+  moveFeatures.add(moveInput);
+
+  return center3;
 }
