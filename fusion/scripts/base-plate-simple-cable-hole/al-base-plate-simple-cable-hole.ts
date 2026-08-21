@@ -117,8 +117,8 @@ function setupParameters(design: adsk.fusion.Design) {
         legOffset: getOrCreateParam('leg_offset', '45mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
         legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante: Bein und Platte (wird bei Solver-Problemen automatisch verkleinert)'),
         cableHoleOffset: getOrCreateParam('cable_hole_offset', '70mm', 'mm', 'Versatz der Kabelkanal-Konstruktionsebene zur YZ-Ebene'),
-        cableHoleDiameter: getOrCreateParam('cable_hole_diameter', '5mm', 'mm', 'Durchmesser des Kabelkanallochs'),
-        cableHoleHeight: getOrCreateParam('cable_hole_height', '5mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite (8.0mm)'),
+        cableHoleDiameter: getOrCreateParam('cable_hole_diameter', '6mm', 'mm', 'Durchmesser des Kabelkanallochs'),
+        cableHoleHeight: getOrCreateParam('cable_hole_height', '4.5mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite (8.0mm)'),
         cableHoleChamfer: getOrCreateParam('cable_hole_chamfer', '0.3mm', 'mm', 'Abfasung der Lochkanten des Kabelkanals')
     };
 }
