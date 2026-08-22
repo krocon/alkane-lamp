@@ -59,6 +59,9 @@ export function run(_context: string): void {
     // 8. Abfasung (0.7mm) der 2 Kabelkanal-Lochkanten am fertigen Gesamtkörper durchführen
     chamferCableHoleOpenings(rootComp, params, targetBody);
 
+    // 9. Verrundung (2mm) der oberen Kante der Kreisfläche des Standfusses am fertigen Gesamtkörper durchführen
+    filletBasePlateTopEdgeAtEnd(rootComp, targetBody, params);
+
     console.log('Erfolgreich generiert!');
 
   } catch (e) {
@@ -1073,8 +1076,6 @@ function createTiltedBasePlateFoot(
   moveInput.defineAsFreeMove(transformMatrix);
   moveFeats.add(moveInput);
 
-  // 5. Verrundung der oberen Kante der Basis-Platte (2mm)
-  filletBasePlateTopEdge(rootComp, plateBody, plateTopZ, params.basePlateDiameter.value / 2.0, params);
 
   // 6. Basis-Platte mit Node 1 verschmelzen (Join)
   const joinTools = adsk.core.ObjectCollection.create();
@@ -1146,43 +1147,93 @@ function boreVerticalLegHole(
 }
 
 /**
- * Verrundet die obere Kante der Basis-Platte (2mm).
+ * Verrundet die obere Kante der Kreisfläche des Standfusses (2mm).
+ * Wird als Schritt 9 zeitlich ganz am Ende am fertigen Gesamtkörper (Node 1) ausgeführt.
  */
-function filletBasePlateTopEdge(
+function filletBasePlateTopEdgeAtEnd(
   rootComp: adsk.fusion.Component,
   body: adsk.fusion.BRepBody,
-  topZ: number,
-  radius: number,
-  _params: ReturnType<typeof setupParameters>
+  params: ReturnType<typeof setupParameters>
 ): void {
-  const expectedLen = 2.0 * Math.PI * radius;
-  let targetEdge: adsk.fusion.BRepEdge | null = null;
+  const targetRadius = params.basePlateDiameter.value / 2.0;
+  const expectedLen = 2.0 * Math.PI * targetRadius;
+  let topEdge: adsk.fusion.BRepEdge | null = null;
+  let maxZ = -Infinity;
 
   for (let i = 0; i < body.edges.count; i++) {
     const edge = body.edges.item(i);
-    const bb = edge.boundingBox;
-    if (Math.abs(bb.minPoint.z - topZ) < 0.1 && Math.abs(bb.maxPoint.z - topZ) < 0.1) {
-      if (Math.abs(edge.length - expectedLen) < 1.0) {
-        targetEdge = edge;
-        break;
+    if (!edge) continue;
+
+    const geom = edge.geometry;
+    let radius = -1;
+    let centerZ = -Infinity;
+
+    if (geom) {
+      if (geom.curveType === adsk.core.Curve3DTypes.Circle3DCurveType) {
+        const circle = geom as adsk.core.Circle3D;
+        radius = circle.radius;
+        centerZ = circle.center.z;
+      } else if (geom.curveType === adsk.core.Curve3DTypes.Arc3DCurveType) {
+        const arc = geom as adsk.core.Arc3D;
+        radius = arc.radius;
+        centerZ = arc.center.z;
+      }
+    }
+
+    if (centerZ === -Infinity) {
+      const bb = edge.boundingBox;
+      centerZ = (bb.minPoint.z + bb.maxPoint.z) / 2.0;
+    }
+
+    const isRadiusMatch = radius > 0 && Math.abs(radius - targetRadius) < 0.2;
+    const isLengthMatch = Math.abs(edge.length - expectedLen) < 2.0;
+
+    if (isRadiusMatch || isLengthMatch) {
+      if (centerZ > maxZ) {
+        maxZ = centerZ;
+        topEdge = edge;
       }
     }
   }
 
-  if (targetEdge) {
-    const filletInput = rootComp.features.filletFeatures.createInput();
+  if (topEdge) {
+    const filletFeatures = rootComp.features.filletFeatures;
+    const filletInput = filletFeatures.createInput();
     const edgeColl = adsk.core.ObjectCollection.create();
-    edgeColl.add(targetEdge);
+    edgeColl.add(topEdge);
+
+    let valInput = adsk.core.ValueInput.createByString('base_plate_rounding');
+    if (!valInput) {
+      valInput = adsk.core.ValueInput.createByReal(params.basePlateRounding.value);
+    }
+
     filletInput.edgeSetInputs.addConstantRadiusEdgeSet(
       edgeColl,
-      adsk.core.ValueInput.createByString('base_plate_rounding'),
+      valInput,
       false
     );
+
     try {
-      rootComp.features.filletFeatures.add(filletInput);
-    } catch (_e) {
-      // Fallback
+      filletFeatures.add(filletInput);
+      console.log('Obere Kante der Basis-Platte (2mm) in Step 9 erfolgreich verrundet.');
+    } catch (e) {
+      console.warn(`Fehler beim Verrunden der oberen Basis-Platten-Kante in Step 9: ${e}`);
+      try {
+        const fallbackInput = filletFeatures.createInput();
+        const fallbackColl = adsk.core.ObjectCollection.create();
+        fallbackColl.add(topEdge);
+        fallbackInput.edgeSetInputs.addConstantRadiusEdgeSet(
+          fallbackColl,
+          adsk.core.ValueInput.createByReal(params.basePlateRounding.value),
+          false
+        );
+        filletFeatures.add(fallbackInput);
+      } catch (err2) {
+        console.warn(`Fallback-Verrundung Step 9 ebenfalls fehlgeschlagen: ${err2}`);
+      }
     }
+  } else {
+    console.warn('Keine obere Kante der Basis-Platte für Step 9 gefunden.');
   }
 }
 
