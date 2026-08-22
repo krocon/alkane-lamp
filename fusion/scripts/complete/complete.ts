@@ -50,7 +50,7 @@ export function run(_context: string): void {
     cutInnerSphere(rootComp, params.innerBallDiameter);
 
     // Node 3 positionieren (Zentrum in XZ-Ebene, 8 cm Abstand zu Node 2, Achsenverlängerung)
-    positionThirdTetrapod(rootComp, node3, center2);
+    const center3 = positionThirdTetrapod(rootComp, node3, center2);
 
     // 7. Verbindungsröhren (ID 31.5mm, OD 46mm, Länge 45mm mittig) erzeugen und verschmelzen
     createConnectionTube1To2(rootComp, params, targetBody, node2);
@@ -61,6 +61,9 @@ export function run(_context: string): void {
 
     // 9. Verrundung (2mm) der oberen Kante der Kreisfläche des Standfusses am fertigen Gesamtkörper durchführen
     filletBasePlateTopEdgeAtEnd(rootComp, targetBody, params);
+
+    // 10. Abrundung (40mm, Tangential G1, Radiustyp: Konstante, Ecktyp: Versatz) der 18 Knoten-Schnittkanten am fertigen Gesamtkörper durchführen
+    applyNodeFilletsAtEnd(rootComp, targetBody, params, center2, center3);
 
     console.log('Erfolgreich generiert!');
 
@@ -174,7 +177,8 @@ function setupParameters(design: adsk.fusion.Design) {
     cableHoleOffset: getOrCreateParam('cable_hole_offset', '90mm', 'mm', 'Versatz der Kabelkanal-Konstruktionsebene'),
     cableHoleDiameter: getOrCreateParam('cable_hole_diameter', '6mm', 'mm', 'Durchmesser des Kabelkanallochs'),
     cableHoleHeight: getOrCreateParam('cable_hole_height', '4.5mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite'),
-    cableHoleChamfer: getOrCreateParam('cable_hole_chamfer', '0.7mm', 'mm', 'Abfasung der Lochkanten des Kabelkanals')
+    cableHoleChamfer: getOrCreateParam('cable_hole_chamfer', '0.7mm', 'mm', 'Abfasung der Lochkanten des Kabelkanals'),
+    nodeFilletRadius: getOrCreateParam('node_fillet_radius', '40mm', 'mm', 'Radius fuer die Tetrapod-Knotenabrundung (40mm, Tangential G1, Konstante, Versatz)')
   };
 }
 
@@ -1390,5 +1394,156 @@ function trimBottomFlushAtZ(
     extrudeFeatures.add(cutInput);
   } catch (_e) {
     // Falls kein Material geschnitten werden muss
+  }
+}
+
+/**
+ * Prüft, ob eine Kante die Außen-Schnittkante zweier Zylinderarme ist (Länge ca. 51.5mm = 5.15cm).
+ */
+function isOuterTetrapodIntersectionEdgeByLength(
+  edge: adsk.fusion.BRepEdge
+): boolean {
+  const lenCm = edge.length; // 3D-Bogenlänge in cm
+  const expectedLenCm = 5.15; // 51.5mm
+  return Math.abs(lenCm - expectedLenCm) < 0.6; // 45.5mm bis 57.5mm
+}
+
+/**
+ * Rundet die 18 Außen-Schnittkanten aller 3 Tetrapoden-Knoten am fertigen Gesamtkörper in Step 10 ab:
+ * - Radius: 40.0mm (nodeFilletRadius)
+ * - Kontinuitätstyp: Tangential (G1)
+ * - Radiustyp: Konstante (Constant radius fillet)
+ * - Tangentenkette: ja (isTangentChain: true)
+ * - Ecktyp: Versatz (Setback corner: isRollingBallCorner = false)
+ *
+ * @param rootComp Die Wurzelkomponente des Designs.
+ * @param targetBody Der fertige Gesamtkörper.
+ * @param params Die Benutzerparameter.
+ * @param center2 Das Zentrum von Node 2.
+ * @param center3 Das Zentrum von Node 3.
+ */
+function applyNodeFilletsAtEnd(
+  rootComp: adsk.fusion.Component,
+  targetBody: adsk.fusion.BRepBody,
+  params: ReturnType<typeof setupParameters>,
+  center2: adsk.core.Point3D,
+  center3: adsk.core.Point3D
+): void {
+  const centers = [
+    adsk.core.Point3D.create(0, 0, 0),
+    center2,
+    center3
+  ];
+
+  const selectedEdges: adsk.fusion.BRepEdge[] = [];
+
+  for (let nodeIdx = 0; nodeIdx < centers.length; nodeIdx++) {
+    const center = centers[nodeIdx];
+    const nodeEdges: { edge: adsk.fusion.BRepEdge; dist: number; lenMm: number }[] = [];
+
+    for (let i = 0; i < targetBody.edges.count; i++) {
+      const edge = targetBody.edges.item(i);
+      if (!edge) continue;
+
+      const midPoint = edge.pointOnEdge;
+      if (!midPoint) continue;
+
+      const dist = midPoint.distanceTo(center);
+      if (dist < 4.5) {
+        if (isOuterTetrapodIntersectionEdgeByLength(edge)) {
+          nodeEdges.push({
+            edge,
+            dist,
+            lenMm: Math.round(edge.length * 100) / 10
+          });
+        }
+      }
+    }
+
+    nodeEdges.sort((a, b) => a.dist - b.dist);
+    const closest6 = nodeEdges.slice(0, 6);
+
+    for (const item of closest6) {
+      if (!selectedEdges.includes(item.edge)) {
+        selectedEdges.push(item.edge);
+        console.log(`Node ${nodeIdx + 1}: Kante mit Länge ${item.lenMm}mm gefunden.`);
+      }
+    }
+  }
+
+  // Fallback: Falls noch nicht 18 Kanten gefunden wurden, alle Kanten im Gesamtkörper nach Längetoleranz ~51.5mm absuchen
+  if (selectedEdges.length < 18) {
+    for (let i = 0; i < targetBody.edges.count; i++) {
+      const edge = targetBody.edges.item(i);
+      if (!edge) continue;
+      if (isOuterTetrapodIntersectionEdgeByLength(edge) && !selectedEdges.includes(edge)) {
+        selectedEdges.push(edge);
+        if (selectedEdges.length === 18) break;
+      }
+    }
+  }
+
+  console.log(`Gefundene Knoten-Schnittkanten für Abrundung (Step 10): ${selectedEdges.length} von 18`);
+
+  if (selectedEdges.length === 0) {
+    console.warn('Keine Knoten-Schnittkanten für Abrundung gefunden.');
+    return;
+  }
+
+  // Abrundung (40mm, Tangential G1, Konstante, Ecktyp: Versatz) ausführen
+  const filletFeatures = rootComp.features.filletFeatures;
+  const filletInput = filletFeatures.createInput();
+  if (!filletInput) return;
+
+  filletInput.isRollingBallCorner = false; // Ecktyp: Versatz (Setback corner)
+
+  const edgeCollection = adsk.core.ObjectCollection.create();
+  for (const edge of selectedEdges) {
+    edgeCollection.add(edge);
+  }
+
+  // Radiustyp: Konstante (40mm / nodeFilletRadius)
+  let valInput = adsk.core.ValueInput.createByString('node_fillet_radius');
+  if (!valInput) {
+    valInput = adsk.core.ValueInput.createByReal(params.nodeFilletRadius.value);
+  }
+
+  const constantEdgeSet = filletInput.edgeSetInputs.addConstantRadiusEdgeSet(
+    edgeCollection,
+    valInput,
+    true
+  );
+  if (!constantEdgeSet) return;
+
+  // Kontinuitätstyp: Tangential (G1)
+  constantEdgeSet.continuity = adsk.fusion.SurfaceContinuityTypes.TangentSurfaceContinuityType;
+
+  try {
+    const feat = filletFeatures.add(filletInput);
+    if (feat) {
+      console.log(`Step 10: Abrundung (${selectedEdges.length} Kanten, 40mm, Tangential G1, Konstante, Versatz) erfolgreich angewendet.`);
+    }
+  } catch (e) {
+    console.warn(`Fehler bei Knotenabrundung mit Parameter: ${e}`);
+    // Fallback mit direktem ValueInput (4.0 cm = 40mm)
+    try {
+      const fallbackInput = filletFeatures.createInput();
+      fallbackInput.isRollingBallCorner = false;
+      const fallbackEdgeSet = fallbackInput.edgeSetInputs.addConstantRadiusEdgeSet(
+        edgeCollection,
+        adsk.core.ValueInput.createByReal(params.nodeFilletRadius.value),
+        true
+      );
+      if (fallbackEdgeSet) {
+        fallbackEdgeSet.continuity = adsk.fusion.SurfaceContinuityTypes.TangentSurfaceContinuityType;
+      }
+      filletFeatures.add(fallbackInput);
+      console.log('Step 10: Fallback-Knotenabrundung mit 40mm erfolgreich angewendet.');
+    } catch (err2) {
+      console.warn(`Step 10: Fallback mit 40mm fehlgeschlagen: ${err2}`);
+      if (ui) {
+        ui.messageBox(`Fehler bei Knotenabrundung in Step 10:\n${err2}`);
+      }
+    }
   }
 }
