@@ -56,6 +56,9 @@ export function run(_context: string): void {
     createConnectionTube1To2(rootComp, params, targetBody, node2);
     createConnectionTube2To3(rootComp, params, targetBody, node3, center2);
 
+    // 8. Abfasung (0.7mm) der 2 Kabelkanal-Lochkanten am fertigen Gesamtkörper durchführen
+    chamferCableHoleOpenings(rootComp, params, targetBody);
+
     console.log('Erfolgreich generiert!');
 
   } catch (e) {
@@ -131,6 +134,18 @@ function setupParameters(design: adsk.fusion.Design) {
     let p = params.itemByName(name);
     if (!p) {
       p = params.add(name, adsk.core.ValueInput.createByString(valueStr), unit, description);
+    } else if (name === 'cable_hole_offset' && Math.abs(p.value - 9.0) > 0.1) {
+      try {
+        p.expression = valueStr;
+      } catch (_e) {
+        // Parameter konnte nicht aktualisiert werden
+      }
+    } else if (name === 'cable_hole_chamfer' && Math.abs(p.value - 0.07) > 0.005) {
+      try {
+        p.expression = valueStr;
+      } catch (_e) {
+        // Parameter konnte nicht aktualisiert werden
+      }
     }
     return p;
   }
@@ -153,10 +168,10 @@ function setupParameters(design: adsk.fusion.Design) {
     // legAngle: getOrCreateParam('leg_angle', '109.47122063449069deg', 'deg', 'Winkel des Beines zur Basis-Platte (parallel zum Verbindungsarm Node 1 -> Node 2)'),
     legOffset: getOrCreateParam('leg_offset', '45mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
     legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante zwischen Bein und Basis-Platte'),
-    cableHoleOffset: getOrCreateParam('cable_hole_offset', '70mm', 'mm', 'Versatz der Kabelkanal-Konstruktionsebene'),
+    cableHoleOffset: getOrCreateParam('cable_hole_offset', '90mm', 'mm', 'Versatz der Kabelkanal-Konstruktionsebene'),
     cableHoleDiameter: getOrCreateParam('cable_hole_diameter', '6mm', 'mm', 'Durchmesser des Kabelkanallochs'),
     cableHoleHeight: getOrCreateParam('cable_hole_height', '4.5mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite'),
-    cableHoleChamfer: getOrCreateParam('cable_hole_chamfer', '0.3mm', 'mm', 'Abfasung der Lochkanten des Kabelkanals')
+    cableHoleChamfer: getOrCreateParam('cable_hole_chamfer', '0.7mm', 'mm', 'Abfasung der Lochkanten des Kabelkanals')
   };
 }
 
@@ -1006,9 +1021,14 @@ function createTiltedBasePlateFoot(
   }
 
   // 3. Skizze & Extrusion für das Kabelkanal-Werkzeug (Cable-Tool, 6mm)
-  // Das Werkzeug verläuft vom Rand der Platte (-offsetCm + cableHoleOffset) nach innen bis zur Fußarm-Mitte (X = 0)
+  // Das Werkzeug verläuft von außerhalb des Plattenrands durch die Fußplatte nach innen bis in das Bein-Innere (X = -0.5 cm)
   let cableToolBody: adsk.fusion.BRepBody | null = null;
-  const cableOffsetVal = -offsetCm + params.cableHoleOffset.value; // -4.5 + 7.0 = +2.5 cm
+  const plateRadiusCm = params.basePlateDiameter.value / 2.0; // 8.0 cm
+  // Position der Konstruktionsebene außerhalb des Plattenrands wählen (Plattenrand liegt bei -offsetCm + plateRadiusCm)
+  const cableOffsetVal = Math.max(
+    -offsetCm + params.cableHoleOffset.value,
+    -offsetCm + plateRadiusCm + 1.0
+  );
   const cablePlaneInput = constructionPlanes.createInput();
   cablePlaneInput.setByOffset(rootComp.yZConstructionPlane, adsk.core.ValueInput.createByReal(cableOffsetVal));
   const cablePlane = constructionPlanes.add(cablePlaneInput);
@@ -1025,7 +1045,7 @@ function createTiltedBasePlateFoot(
       cableSketch.profiles.item(0),
       adsk.fusion.FeatureOperations.NewBodyFeatureOperation
     );
-    const cutDistanceCm = -(cableOffsetVal + 0.5); // z.B. -3.0 cm nach innen bis X = -0.5 cm
+    const cutDistanceCm = -(cableOffsetVal + 0.5); // von cableOffsetVal durch die Plattenaußenwand nach innen bis X = -0.5 cm
     cableExtInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(cutDistanceCm));
     const cableFeat = features.extrudeFeatures.add(cableExtInput);
     if (cableFeat && cableFeat.bodies.count > 0) {
@@ -1092,9 +1112,6 @@ function createTiltedBasePlateFoot(
 
   // 10. 31.5mm Innenbohrung durchgehend durch die Basis-Platte freischneiden
   boreVerticalLegHole(rootComp, params, node1);
-
-  // 11. Abfasung (0.3mm) an der Lochkante der Kabelkanal-Eintrittsöffnung anbringen
-  chamferCableHoleOpening(rootComp, params, node1);
 
   return node1;
 }
@@ -1212,25 +1229,35 @@ function filletLegPlateJunction(
 }
 
 /**
- * Bringt eine Abfasung (0.3mm) an der äußeren Eintrittsöffnung des Kabelkanals an.
+ * Bringt eine Abfasung (0.7mm) an beiden Öffnungskanten des Kabelkanals (Eintritt & Austritt) an.
+ * Wird am Ende des Gesamtprozesses aufgerufen, damit nachfolgende Features die Fase nicht aufheben.
  */
-function chamferCableHoleOpening(
+function chamferCableHoleOpenings(
   rootComp: adsk.fusion.Component,
   params: ReturnType<typeof setupParameters>,
   body: adsk.fusion.BRepBody
 ): void {
-  const chamferVal = params.cableHoleChamfer.value;
+  const chamferVal = params.cableHoleChamfer.value; // 0.07 cm = 0.7mm
   if (chamferVal <= 0) return;
 
-  const targetRadius = params.cableHoleDiameter.value / 2.0; // 0.3 cm
-  const expectedLen = 2.0 * Math.PI * targetRadius;
-
+  const targetRadius = params.cableHoleDiameter.value / 2.0; // 0.3 cm = 3mm
   const chamferEdges: adsk.fusion.BRepEdge[] = [];
+
+  // Kanten suchen, die zu einer Zylinderfläche des Kabelkanals (Radius 3mm) gehören
   for (let i = 0; i < body.edges.count; i++) {
     const edge = body.edges.item(i);
-    if (Math.abs(edge.length - expectedLen) < 0.5) {
-      if (edge.boundingBox.maxPoint.x > 1.0) {
-        chamferEdges.push(edge);
+    if (!edge) continue;
+
+    for (let f = 0; f < edge.faces.count; f++) {
+      const face = edge.faces.item(f);
+      if (face && face.geometry.surfaceType === adsk.core.SurfaceTypes.CylinderSurfaceType) {
+        const cyl = face.geometry as adsk.core.Cylinder;
+        if (Math.abs(cyl.radius - targetRadius) < 0.05) {
+          if (!chamferEdges.includes(edge)) {
+            chamferEdges.push(edge);
+          }
+          break;
+        }
       }
     }
   }
@@ -1242,16 +1269,40 @@ function chamferCableHoleOpening(
     for (const edge of chamferEdges) {
       edgeColl.add(edge);
     }
+
+    let valInput = adsk.core.ValueInput.createByString('cable_hole_chamfer');
+    if (!valInput) {
+      valInput = adsk.core.ValueInput.createByReal(chamferVal);
+    }
+
     chamferInput.chamferEdgeSets.addEqualDistanceChamferEdgeSet(
       edgeColl,
-      adsk.core.ValueInput.createByString('cable_hole_chamfer'),
+      valInput,
       true
     );
+
     try {
-      chamferFeatures.add(chamferInput);
-    } catch (_e) {
-      // Fallback
+      const feat = chamferFeatures.add(chamferInput);
+      if (!feat) {
+        console.warn('Fase für Kabelkanal konnte nicht erstellt werden.');
+      }
+    } catch (e) {
+      console.warn(`Fehler beim Erstellen der Kabelkanal-Fase: ${e}`);
+      // Fallback mit direktem Zahlenwert
+      try {
+        const fallbackInput = chamferFeatures.createInput2();
+        fallbackInput.chamferEdgeSets.addEqualDistanceChamferEdgeSet(
+          edgeColl,
+          adsk.core.ValueInput.createByReal(chamferVal),
+          true
+        );
+        chamferFeatures.add(fallbackInput);
+      } catch (err2) {
+        console.warn(`Fallback-Fase ebenfalls fehlgeschlagen: ${err2}`);
+      }
     }
+  } else {
+    console.warn('Keine Kanten für die Kabelkanal-Fase gefunden.');
   }
 }
 
