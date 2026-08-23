@@ -79,6 +79,9 @@ export function run(_context: string): void {
     // 11. Definiere die XY-Ebene als untere Fußplattenebene (so dass das Gebilde auf dem Fuß steht)
     alignFootToXYPlane(rootComp, targetBody);
 
+    // 12. Suche die in den Röhren befindlichen Kanten mit der Länge 33.584mm, selektiere sie und mache eine Abrundung von 10mm
+    filletTubeEdges(rootComp, targetBody);
+
     console.log('Erfolgreich generiert!');
 
   } catch (e) {
@@ -188,8 +191,8 @@ function setupParameters(design: adsk.fusion.Design) {
     legOffset: getOrCreateParam('leg_offset', '25mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
     legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante zwischen Bein und Basis-Platte'),
     cableHoleOffset: getOrCreateParam('cable_hole_offset', '90mm', 'mm', 'Versatz der Kabelkanal-Konstruktionsebene'),
-    cableHoleDiameter: getOrCreateParam('cable_hole_diameter', '6mm', 'mm', 'Durchmesser des Kabelkanallochs'),
-    cableHoleHeight: getOrCreateParam('cable_hole_height', '4.5mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite'),
+    cableHoleDiameter: getOrCreateParam('cable_hole_diameter', '7mm', 'mm', 'Durchmesser des Kabelkanallochs'),
+    cableHoleHeight: getOrCreateParam('cable_hole_height', '5.0mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite'),
     cableHoleChamfer: getOrCreateParam('cable_hole_chamfer', '0.7mm', 'mm', 'Abfasung der Lochkanten des Kabelkanals'),
     nodeFilletRadius: getOrCreateParam('node_fillet_radius', '40mm', 'mm', 'Radius fuer die Tetrapod-Knotenabrundung (40mm, Tangential G1, Konstante, Versatz)'),
     footLegBoreDiameter: getOrCreateParam('foot_leg_bore_diameter', '36mm', 'mm', 'Durchmesser der Aufbohrung des Fussbeins (ca. 38mm)')
@@ -1919,4 +1922,126 @@ function applyNodeFilletsAtEnd(
     `Die 18 Kanten wurden blau im Modell markiert und erfolgreich mit 40 mm verrundet.`;
 
   console.log(msg);
+}
+
+/**
+ * Step 12: Selektiert die in den Röhren befindlichen Kanten mit der Länge 33.584 mm (3.3584 cm)
+ * und führt eine Abrundung von 10 mm (1.0 cm) durch.
+ */
+function filletTubeEdges(
+  rootComp: adsk.fusion.Component,
+  targetBody: adsk.fusion.BRepBody
+): void {
+  let liveBody = targetBody;
+  if (rootComp.bRepBodies.count > 0) {
+    const b = rootComp.bRepBodies.item(0);
+    if (b) liveBody = b;
+  }
+
+  const expectedLenCm = 3.3584; // 33.584 mm in cm
+  const matchingEdges: adsk.fusion.BRepEdge[] = [];
+
+  for (let i = 0; i < liveBody.edges.count; i++) {
+    const edge = liveBody.edges.item(i);
+    if (!edge) continue;
+
+    const lenCm = edge.length;
+    // Strikte Filterung auf 33.584 mm Schnittkanten (Toleranz ± 0.5 mm: 3.3084 cm bis 3.4084 cm)
+    if (Math.abs(lenCm - expectedLenCm) < 0.05) {
+      if (!matchingEdges.includes(edge)) {
+        matchingEdges.push(edge);
+      }
+    }
+  }
+
+  console.log(`Step 12: ${matchingEdges.length} Röhren-Kanten mit Länge ca. 33.584mm gefunden.`);
+
+  if (matchingEdges.length === 0) {
+    console.warn('Step 12: Keine Röhren-Kanten mit der Länge 33.584mm gefunden.');
+    return;
+  }
+
+  // Kanten in der UI selektieren
+  if (ui) {
+    try {
+      ui.activeSelections.clear();
+      for (const edge of matchingEdges) {
+        ui.activeSelections.add(edge);
+      }
+    } catch (_e) { }
+  }
+
+  // Abrundung von 10mm (1.0 cm) durchführen
+  const filletFeatures = rootComp.features.filletFeatures;
+  const radiusCm = 1.0; // 10mm = 1.0 cm
+
+  // Versuch A: Alle Kanten zusammen (isTangentChain: true)
+  try {
+    const input1 = filletFeatures.createInput();
+    if (input1) {
+      input1.isRollingBallCorner = false;
+      const coll1 = adsk.core.ObjectCollection.create();
+      matchingEdges.forEach(e => coll1.add(e));
+      const valInput1 = adsk.core.ValueInput.createByReal(radiusCm);
+      const set1 = input1.edgeSetInputs.addConstantRadiusEdgeSet(coll1, valInput1, true);
+      if (set1) {
+        set1.continuity = adsk.fusion.SurfaceContinuityTypes.TangentSurfaceContinuityType;
+      }
+      const feat = filletFeatures.add(input1);
+      if (feat) {
+        console.log(`Step 12: Abrundung der Röhren-Kanten (${matchingEdges.length} Kanten, 10mm, Tangentenkette) erfolgreich.`);
+        return;
+      }
+    }
+  } catch (e1) {
+    console.warn(`Step 12: Versuch A (10mm mit Tangentenkette) fehlgeschlagen: ${e1}`);
+  }
+
+  // Versuch B: Alle Kanten zusammen (isTangentChain: false)
+  try {
+    const input2 = filletFeatures.createInput();
+    if (input2) {
+      input2.isRollingBallCorner = false;
+      const coll2 = adsk.core.ObjectCollection.create();
+      matchingEdges.forEach(e => coll2.add(e));
+      const valInput2 = adsk.core.ValueInput.createByReal(radiusCm);
+      const set2 = input2.edgeSetInputs.addConstantRadiusEdgeSet(coll2, valInput2, false);
+      if (set2) {
+        set2.continuity = adsk.fusion.SurfaceContinuityTypes.TangentSurfaceContinuityType;
+      }
+      const feat = filletFeatures.add(input2);
+      if (feat) {
+        console.log(`Step 12: Abrundung der Röhren-Kanten (${matchingEdges.length} Kanten, 10mm, ohne Tangentenkette) erfolgreich.`);
+        return;
+      }
+    }
+  } catch (e2) {
+    console.warn(`Step 12: Versuch B (10mm ohne Tangentenkette) fehlgeschlagen: ${e2}`);
+  }
+
+  // Versuch C: Kanten einzeln verrunden
+  let successCount = 0;
+  for (const edge of matchingEdges) {
+    try {
+      const input3 = filletFeatures.createInput();
+      if (input3) {
+        input3.isRollingBallCorner = false;
+        const coll3 = adsk.core.ObjectCollection.create();
+        coll3.add(edge);
+        const valInput3 = adsk.core.ValueInput.createByReal(radiusCm);
+        const set3 = input3.edgeSetInputs.addConstantRadiusEdgeSet(coll3, valInput3, false);
+        if (set3) {
+          set3.continuity = adsk.fusion.SurfaceContinuityTypes.TangentSurfaceContinuityType;
+        }
+        const feat = filletFeatures.add(input3);
+        if (feat) successCount++;
+      }
+    } catch (_e3) { }
+  }
+
+  if (successCount > 0) {
+    console.log(`Step 12: Einzelkanten-Abrundung der Röhren-Kanten (${successCount}/${matchingEdges.length} Kanten, 10mm) erfolgreich.`);
+  } else {
+    console.warn('Step 12: Abrundung der Röhren-Kanten mit 10mm fehlgeschlagen.');
+  }
 }
