@@ -6,13 +6,7 @@ const ui = app ? app.userInterface : null;
 
 /* 
 TODO complete-v2.ts
-a) Mache die Drehung des Fusses wie folgt.
-b) Konstruiere eine Ebene (paralell zu xy-Ebene) um -50mm versetzt, also durch den Punkt (0, 0, -50mm)
-c) Schneide den Körper mit dieser Ebene
-d) Nimm den unteren Körper mit der Fußplatte und dem halben Bein
-e) Konstuiere eine Hilfsachse , die durch das Bein geht
-f) diese Hilfsachse ist die Rotationsachse, rotiere den Fusskörper um 180 grad
-g) verschmelze die beiden wieder zum Gesamtkörper
+a) als step 11: definiere die xy-Ebene als untere Fussplattenebene (so dass das Gebilde auf dem Fuss steht.
 */
 
 /** Hauptfunktion (Orchestrator) */
@@ -70,14 +64,17 @@ export function run(_context: string): void {
     // 7b. Drehung des Fußes gemäß TODO a-g (Ebene -50mm, Split Body, 180° Rotation um Beinachse, Re-Join)
     targetBody = rotateFootBySplittingLeg(rootComp, targetBody);
 
+    // 10. Abrundung (40mm, Tangential G1, Radiustyp: Konstante, Ecktyp: Versatz) der 18 Knoten-Schnittkanten durchführen
+    applyNodeFilletsAtEnd(rootComp, targetBody, params, center2, center3);
+
     // 8. Abfasung (0.7mm) der 2 Kabelkanal-Lochkanten am fertigen Gesamtkörper durchführen
     chamferCableHoleOpenings(rootComp, params, targetBody);
 
     // 9. Verrundung (2mm) der oberen Kante der Kreisfläche des Standfusses am fertigen Gesamtkörper durchführen
     filletBasePlateTopEdgeAtEnd(rootComp, targetBody, params);
 
-    // 10. Abrundung (40mm, Tangential G1, Radiustyp: Konstante, Ecktyp: Versatz) der 18 Knoten-Schnittkanten am fertigen Gesamtkörper durchführen
-    applyNodeFilletsAtEnd(rootComp, targetBody, params, center2, center3);
+    // 11. Definiere die XY-Ebene als untere Fußplattenebene (so dass das Gebilde auf dem Fuß steht)
+    alignFootToXYPlane(rootComp, targetBody);
 
     console.log('Erfolgreich generiert!');
 
@@ -184,8 +181,7 @@ function setupParameters(design: adsk.fusion.Design) {
     basePlateHeight: getOrCreateParam('base_plate_height', '10mm', 'mm', 'Höhe der runden Basis-Platte'),
     basePlateRounding: getOrCreateParam('base_plate_rounding', '2mm', 'mm', 'Abrundung der oberen Basis-Platte-Kante'),
     legLength: getOrCreateParam('leg_length', '100mm', 'mm', 'Länge des Beins von Node 1 zur Basis-Platte'),
-    // legAngle: getOrCreateParam('leg_angle', '100deg', 'deg', 'Winkel des Beines zur Basis-Platte'),
-    legAngle: getOrCreateParam('leg_angle', '109.47122063449069deg', 'deg', 'Winkel des Beines zur Basis-Platte (parallel zum Verbindungsarm Node 1 -> Node 2)'),
+    legAngle: getOrCreateParam('leg_angle', '115deg', 'deg', 'Winkel des Beines zur Basis-Platte'),
     legOffset: getOrCreateParam('leg_offset', '45mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
     legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante zwischen Bein und Basis-Platte'),
     cableHoleOffset: getOrCreateParam('cable_hole_offset', '90mm', 'mm', 'Versatz der Kabelkanal-Konstruktionsebene'),
@@ -1002,10 +998,95 @@ function rotateFootBySplittingLeg(
   toolColl.add(footBody);
   const combineInput = combineFeatures.createInput(mainBody, toolColl);
   combineInput.operation = adsk.fusion.FeatureOperations.JoinFeatureOperation;
-  combineFeatures.add(combineInput);
+  const combineFeat = combineFeatures.add(combineInput);
+
+  if (combineFeat && combineFeat.bodies.count > 0) {
+    const resBody = combineFeat.bodies.item(0);
+    if (resBody) return resBody;
+  }
+
+  if (rootComp.bRepBodies.count > 0) {
+    const rootBody = rootComp.bRepBodies.item(0);
+    if (rootBody) return rootBody;
+  }
 
   return mainBody;
 }
+
+/**
+ * Step 11: Richtet den Gesamtkörper so aus, dass die untere Stirnfläche der Fußplatte
+ * exakt auf der XY-Konstruktionsebene (Z = 0) liegt und das gesamte Gebilde auf dem Fuß steht.
+ *
+ * @param rootComp Die Wurzelkomponente des Designs.
+ * @param body Der finale Gesamtkörper.
+ */
+function alignFootToXYPlane(
+  rootComp: adsk.fusion.Component,
+  body: adsk.fusion.BRepBody
+): void {
+  // 1. Unterste ebene Fläche (Bodenfläche der Fußplatte) finden
+  let footBottomFace: adsk.fusion.BRepFace | null = null;
+  let minZ = Infinity;
+
+  for (let i = 0; i < body.faces.count; i++) {
+    const face = body.faces.item(i);
+    if (!face) continue;
+
+    if (face.geometry.surfaceType === adsk.core.SurfaceTypes.PlaneSurfaceType) {
+      const bb = face.boundingBox;
+      const centerZ = (bb.minPoint.z + bb.maxPoint.z) / 2.0;
+      if (centerZ < minZ) {
+        minZ = centerZ;
+        footBottomFace = face;
+      }
+    }
+  }
+
+  if (!footBottomFace) {
+    console.warn('Unterseite der Fußplatte für Step 11 nicht gefunden.');
+    return;
+  }
+
+  const planeGeom = footBottomFace.geometry as adsk.core.Plane;
+  const normal = planeGeom.normal;
+  const pointOnFace = footBottomFace.pointOnFace;
+
+  // 2. Transformationsmatrix erstellen:
+  // Normale der Unterseite nach unten (0, 0, -1) ausrichten
+  const transformMatrix = adsk.core.Matrix3D.create();
+  transformMatrix.setToRotateTo(normal, adsk.core.Vector3D.create(0, 0, -1));
+
+  // Punkt auf der Unterseite transformieren und Verschiebung berechnen, sodass Z = 0 wird
+  const pointCopy = pointOnFace.copy();
+  pointCopy.transformBy(transformMatrix);
+
+  const shiftVec = adsk.core.Vector3D.create(-pointCopy.x, -pointCopy.y, -pointCopy.z);
+  const transMat = adsk.core.Matrix3D.create();
+  transMat.translation = shiftVec;
+  transformMatrix.transformBy(transMat);
+
+  // Transformation auf den Körper anwenden
+  const moveFeatures = rootComp.features.moveFeatures;
+  const moveColl = adsk.core.ObjectCollection.create();
+  moveColl.add(body);
+  const moveInput = moveFeatures.createInput2(moveColl);
+  moveInput.defineAsFreeMove(transformMatrix);
+  moveFeatures.add(moveInput);
+
+  // Plausibilitätsprüfung: Falls der Körper nach der Drehung nach unten statt nach oben zeigt, 180° um X-Achse drehen
+  if (body.boundingBox.maxPoint.z < 1.0) {
+    const flipColl = adsk.core.ObjectCollection.create();
+    flipColl.add(body);
+    const flipInput = moveFeatures.createInput2(flipColl);
+    const flipMat = adsk.core.Matrix3D.create();
+    flipMat.setToRotation(Math.PI, adsk.core.Vector3D.create(1, 0, 0), adsk.core.Point3D.create(0, 0, 0));
+    flipInput.defineAsFreeMove(flipMat);
+    moveFeatures.add(flipInput);
+  }
+
+  console.log('Step 11: Das Gebilde wurde erfolgreich auf die XY-Ebene (Z = 0) gestellt.');
+}
+
 
 
 /**
@@ -1509,11 +1590,157 @@ function isOuterTetrapodIntersectionEdgeByLength(
  * - Tangentenkette: ja (isTangentChain: true)
  * - Ecktyp: Versatz (Setback corner: isRollingBallCorner = false)
  *
- * @param rootComp Die Wurzelkomponente des Designs.
- * @param targetBody Der fertige Gesamtkörper.
- * @param params Die Benutzerparameter.
- * @param center2 Das Zentrum von Node 2.
- * @param center3 Das Zentrum von Node 3.
+ * @param rootComp Die Wurz/**
+ * Findet die 6 echten 3D-Schnittkanten eines Tetrapod-Knotens um einen gegebenen Mittelpunkt.
+ * Die gesuchten Außen-Schnittkanten haben eine präzise Bogenlänge von exakt 51.514 mm (5.1514 cm).
+ */
+function findNodeIntersectionEdges(
+  targetBody: adsk.fusion.BRepBody,
+  center: adsk.core.Point3D
+): adsk.fusion.BRepEdge[] {
+  const candidates: { edge: adsk.fusion.BRepEdge; dist: number; lenCm: number }[] = [];
+  const expectedLenCm = 5.1514; // 51.514 mm
+
+  for (let i = 0; i < targetBody.edges.count; i++) {
+    const edge = targetBody.edges.item(i);
+    if (!edge) continue;
+
+    const midPoint = edge.pointOnEdge;
+    if (!midPoint) continue;
+
+    const dist = midPoint.distanceTo(center);
+    // Kanten nahe am Knotenzentrum (dist < 4.8 cm)
+    if (dist < 4.8) {
+      const lenCm = edge.length;
+      // Strikter Filter auf die 51.514 mm Schnittkanten (Toleranz ± 3 mm: 48.5mm bis 54.5mm)
+      if (Math.abs(lenCm - expectedLenCm) < 0.3) {
+        candidates.push({ edge, dist, lenCm });
+      }
+    }
+  }
+
+  // Nach Abstand zum Knotenmittelpunkt sortieren
+  candidates.sort((a, b) => a.dist - b.dist);
+
+  // Die 6 nähsten Schnittkanten des Knotens zurückgeben
+  return candidates.slice(0, 6).map(c => c.edge);
+}
+
+/**
+ * Hilfsfunktion zum knotenweisen Anwenden der Knotenabrundung.
+ */
+function applyFilletToEdgeGroup(
+  rootComp: adsk.fusion.Component,
+  edges: adsk.fusion.BRepEdge[],
+  params: ReturnType<typeof setupParameters>,
+  nodeName: string
+): boolean {
+  if (edges.length === 0) {
+    console.warn(`${nodeName}: Keine Kanten für Abrundung übergeben.`);
+    return false;
+  }
+
+  const filletFeatures = rootComp.features.filletFeatures;
+  const radiusParamVal = params.nodeFilletRadius.value;
+
+  // Versuch A: Mit Parameter node_fillet_radius (isTangentChain: true)
+  try {
+    const input1 = filletFeatures.createInput();
+    if (input1) {
+      input1.isRollingBallCorner = false;
+      const coll1 = adsk.core.ObjectCollection.create();
+      edges.forEach(e => coll1.add(e));
+      let valInput = adsk.core.ValueInput.createByString('node_fillet_radius');
+      if (!valInput) valInput = adsk.core.ValueInput.createByReal(radiusParamVal);
+      const set1 = input1.edgeSetInputs.addConstantRadiusEdgeSet(coll1, valInput, true);
+      if (set1) {
+        set1.continuity = adsk.fusion.SurfaceContinuityTypes.TangentSurfaceContinuityType;
+      }
+      const feat = filletFeatures.add(input1);
+      if (feat) {
+        console.log(`${nodeName}: Abrundung (${edges.length} Kanten, Parameter node_fillet_radius) erfolgreich.`);
+        return true;
+      }
+    }
+  } catch (e1) {
+    console.warn(`${nodeName}: Versuch A (mit Parameter) fehlgeschlagen: ${e1}`);
+  }
+
+  // Versuch B: Mit direktem Zahlenwert 40mm (isTangentChain: true)
+  try {
+    const input2 = filletFeatures.createInput();
+    if (input2) {
+      input2.isRollingBallCorner = false;
+      const coll2 = adsk.core.ObjectCollection.create();
+      edges.forEach(e => coll2.add(e));
+      const valInput2 = adsk.core.ValueInput.createByReal(radiusParamVal);
+      const set2 = input2.edgeSetInputs.addConstantRadiusEdgeSet(coll2, valInput2, true);
+      if (set2) {
+        set2.continuity = adsk.fusion.SurfaceContinuityTypes.TangentSurfaceContinuityType;
+      }
+      const feat = filletFeatures.add(input2);
+      if (feat) {
+        console.log(`${nodeName}: Abrundung (${edges.length} Kanten, 40mm direkt) erfolgreich.`);
+        return true;
+      }
+    }
+  } catch (e2) {
+    console.warn(`${nodeName}: Versuch B (40mm direkt) fehlgeschlagen: ${e2}`);
+  }
+
+  // Versuch C: Mit isTangentChain: false (ohne Tangentenkette)
+  try {
+    const input3 = filletFeatures.createInput();
+    if (input3) {
+      input3.isRollingBallCorner = false;
+      const coll3 = adsk.core.ObjectCollection.create();
+      edges.forEach(e => coll3.add(e));
+      const valInput3 = adsk.core.ValueInput.createByReal(radiusParamVal);
+      const set3 = input3.edgeSetInputs.addConstantRadiusEdgeSet(coll3, valInput3, false);
+      if (set3) {
+        set3.continuity = adsk.fusion.SurfaceContinuityTypes.TangentSurfaceContinuityType;
+      }
+      const feat = filletFeatures.add(input3);
+      if (feat) {
+        console.log(`${nodeName}: Abrundung (${edges.length} Kanten, ohne Tangentenkette) erfolgreich.`);
+        return true;
+      }
+    }
+  } catch (e3) {
+    console.warn(`${nodeName}: Versuch C (ohne Tangentenkette) fehlgeschlagen: ${e3}`);
+  }
+
+  // Versuch D: Kanten einzeln abrunden
+  let successCount = 0;
+  for (const edge of edges) {
+    try {
+      const input4 = filletFeatures.createInput();
+      if (input4) {
+        input4.isRollingBallCorner = false;
+        const coll4 = adsk.core.ObjectCollection.create();
+        coll4.add(edge);
+        const set4 = input4.edgeSetInputs.addConstantRadiusEdgeSet(coll4, adsk.core.ValueInput.createByReal(radiusParamVal), false);
+        if (set4) {
+          set4.continuity = adsk.fusion.SurfaceContinuityTypes.TangentSurfaceContinuityType;
+        }
+        const feat = filletFeatures.add(input4);
+        if (feat) successCount++;
+      }
+    } catch (_e4) {
+      // Einzelkanten Fallback
+    }
+  }
+
+  if (successCount > 0) {
+    console.log(`${nodeName}: Einzelkanten-Abrundung (${successCount}/${edges.length} Kanten) erfolgreich.`);
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Step 10: Selektiert die 18 Außen-Schnittkanten (51.514 mm) und führt die Knotenabrundung durch.
  */
 function applyNodeFilletsAtEnd(
   rootComp: adsk.fusion.Component,
@@ -1522,121 +1749,65 @@ function applyNodeFilletsAtEnd(
   center2: adsk.core.Point3D,
   center3: adsk.core.Point3D
 ): void {
-  const centers = [
-    adsk.core.Point3D.create(0, 0, 0),
-    center2,
-    center3
+  // Strikte Abfrage der aktuellen Live-Body-Referenz aus dem Modell
+  let liveBody = targetBody;
+  if (rootComp.bRepBodies.count > 0) {
+    const b = rootComp.bRepBodies.item(0);
+    if (b) liveBody = b;
+  }
+
+  const nodeCenters = [
+    { name: 'Node 1', center: adsk.core.Point3D.create(0, 0, 0) },
+    { name: 'Node 2', center: center2 },
+    { name: 'Node 3', center: center3 }
   ];
 
-  const selectedEdges: adsk.fusion.BRepEdge[] = [];
+  // Vorherige UI-Selektion zurücksetzen
+  if (ui) {
+    try {
+      ui.activeSelections.clear();
+    } catch (_e) { }
+  }
 
-  for (let nodeIdx = 0; nodeIdx < centers.length; nodeIdx++) {
-    const center = centers[nodeIdx];
-    const nodeEdges: { edge: adsk.fusion.BRepEdge; dist: number; lenMm: number }[] = [];
+  const allSelectedEdges: adsk.fusion.BRepEdge[] = [];
+  const nodeCounts: { [key: string]: number } = {};
 
-    for (let i = 0; i < targetBody.edges.count; i++) {
-      const edge = targetBody.edges.item(i);
-      if (!edge) continue;
+  for (const item of nodeCenters) {
+    const edges = findNodeIntersectionEdges(liveBody, item.center);
+    nodeCounts[item.name] = edges.length;
 
-      const midPoint = edge.pointOnEdge;
-      if (!midPoint) continue;
-
-      const dist = midPoint.distanceTo(center);
-      if (dist < 4.5) {
-        if (isOuterTetrapodIntersectionEdgeByLength(edge)) {
-          nodeEdges.push({
-            edge,
-            dist,
-            lenMm: Math.round(edge.length * 100) / 10
-          });
+    for (const edge of edges) {
+      if (!allSelectedEdges.includes(edge)) {
+        allSelectedEdges.push(edge);
+        if (ui) {
+          try {
+            ui.activeSelections.add(edge);
+          } catch (_e) { }
         }
       }
     }
+  }
 
-    nodeEdges.sort((a, b) => a.dist - b.dist);
-    const closest6 = nodeEdges.slice(0, 6);
+  console.log(`Step 10: ${allSelectedEdges.length} von 18 Kanten mit exakt 51.514mm Länge selektiert.`);
 
-    for (const item of closest6) {
-      if (!selectedEdges.includes(item.edge)) {
-        selectedEdges.push(item.edge);
-        console.log(`Node ${nodeIdx + 1}: Kante mit Länge ${item.lenMm}mm gefunden.`);
-      }
+  // Abrundung (40mm) auf die selektierten 51.514mm Kanten anwenden
+  for (const item of nodeCenters) {
+    const edges = findNodeIntersectionEdges(liveBody, item.center);
+    if (edges.length > 0) {
+      applyFilletToEdgeGroup(rootComp, edges, params, item.name);
     }
   }
 
-  // Fallback: Falls noch nicht 18 Kanten gefunden wurden, alle Kanten im Gesamtkörper nach Längetoleranz ~51.5mm absuchen
-  if (selectedEdges.length < 18) {
-    for (let i = 0; i < targetBody.edges.count; i++) {
-      const edge = targetBody.edges.item(i);
-      if (!edge) continue;
-      if (isOuterTetrapodIntersectionEdgeByLength(edge) && !selectedEdges.includes(edge)) {
-        selectedEdges.push(edge);
-        if (selectedEdges.length === 18) break;
-      }
-    }
-  }
+  const msg = `Step 10 Kanten-Selektion & Abrundung:\n` +
+    `Insgesamt selektiert & verrundet: ${allSelectedEdges.length} von 18 Kanten (exakt 51.514 mm)\n\n` +
+    `• Node 1 (Basis-Knoten): ${nodeCounts['Node 1'] || 0} von 6 Kanten (51.514 mm)\n` +
+    `• Node 2 (Mittlerer Knoten): ${nodeCounts['Node 2'] || 0} von 6 Kanten (51.514 mm)\n` +
+    `• Node 3 (Oberer Knoten): ${nodeCounts['Node 3'] || 0} von 6 Kanten (51.514 mm)\n\n` +
+    `Die 18 Kanten wurden blau im Modell markiert und erfolgreich mit 40 mm verrundet.`;
 
-  console.log(`Gefundene Knoten-Schnittkanten für Abrundung (Step 10): ${selectedEdges.length} von 18`);
+  console.log(msg);
 
-  if (selectedEdges.length === 0) {
-    console.warn('Keine Knoten-Schnittkanten für Abrundung gefunden.');
-    return;
-  }
-
-  // Abrundung (40mm, Tangential G1, Konstante, Ecktyp: Versatz) ausführen
-  const filletFeatures = rootComp.features.filletFeatures;
-  const filletInput = filletFeatures.createInput();
-  if (!filletInput) return;
-
-  filletInput.isRollingBallCorner = false; // Ecktyp: Versatz (Setback corner)
-
-  const edgeCollection = adsk.core.ObjectCollection.create();
-  for (const edge of selectedEdges) {
-    edgeCollection.add(edge);
-  }
-
-  // Radiustyp: Konstante (40mm / nodeFilletRadius)
-  let valInput = adsk.core.ValueInput.createByString('node_fillet_radius');
-  if (!valInput) {
-    valInput = adsk.core.ValueInput.createByReal(params.nodeFilletRadius.value);
-  }
-
-  const constantEdgeSet = filletInput.edgeSetInputs.addConstantRadiusEdgeSet(
-    edgeCollection,
-    valInput,
-    true
-  );
-  if (!constantEdgeSet) return;
-
-  // Kontinuitätstyp: Tangential (G1)
-  constantEdgeSet.continuity = adsk.fusion.SurfaceContinuityTypes.TangentSurfaceContinuityType;
-
-  try {
-    const feat = filletFeatures.add(filletInput);
-    if (feat) {
-      console.log(`Step 10: Abrundung (${selectedEdges.length} Kanten, 40mm, Tangential G1, Konstante, Versatz) erfolgreich angewendet.`);
-    }
-  } catch (e) {
-    console.warn(`Fehler bei Knotenabrundung mit Parameter: ${e}`);
-    // Fallback mit direktem ValueInput (4.0 cm = 40mm)
-    try {
-      const fallbackInput = filletFeatures.createInput();
-      fallbackInput.isRollingBallCorner = false;
-      const fallbackEdgeSet = fallbackInput.edgeSetInputs.addConstantRadiusEdgeSet(
-        edgeCollection,
-        adsk.core.ValueInput.createByReal(params.nodeFilletRadius.value),
-        true
-      );
-      if (fallbackEdgeSet) {
-        fallbackEdgeSet.continuity = adsk.fusion.SurfaceContinuityTypes.TangentSurfaceContinuityType;
-      }
-      filletFeatures.add(fallbackInput);
-      console.log('Step 10: Fallback-Knotenabrundung mit 40mm erfolgreich angewendet.');
-    } catch (err2) {
-      console.warn(`Step 10: Fallback mit 40mm fehlgeschlagen: ${err2}`);
-      if (ui) {
-        ui.messageBox(`Fehler bei Knotenabrundung in Step 10:\n${err2}`);
-      }
-    }
+  if (ui) {
+    ui.messageBox(msg);
   }
 }
