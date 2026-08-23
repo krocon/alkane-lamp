@@ -185,7 +185,7 @@ function setupParameters(design: adsk.fusion.Design) {
     basePlateRounding: getOrCreateParam('base_plate_rounding', '2mm', 'mm', 'Abrundung der oberen Basis-Platte-Kante'),
     legLength: getOrCreateParam('leg_length', '100mm', 'mm', 'Länge des Beins von Node 1 zur Basis-Platte'),
     legAngle: getOrCreateParam('leg_angle', '115deg', 'deg', 'Winkel des Beines zur Basis-Platte'),
-    legOffset: getOrCreateParam('leg_offset', '45mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
+    legOffset: getOrCreateParam('leg_offset', '25mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
     legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante zwischen Bein und Basis-Platte'),
     cableHoleOffset: getOrCreateParam('cable_hole_offset', '90mm', 'mm', 'Versatz der Kabelkanal-Konstruktionsebene'),
     cableHoleDiameter: getOrCreateParam('cable_hole_diameter', '6mm', 'mm', 'Durchmesser des Kabelkanallochs'),
