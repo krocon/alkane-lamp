@@ -4,6 +4,17 @@ import { adsk } from "@adsk/fusion";
 const app = adsk.core.Application.get();
 const ui = app ? app.userInterface : null;
 
+/* 
+TODO complete-v2.ts
+a) Mache die Drehung des Fusses wie folgt.
+b) Konstruiere eine Ebene (paralell zu xy-Ebene) um -50mm versetzt, also durch den Punkt (0, 0, -50mm)
+c) Schneide den Körper mit dieser Ebene
+d) Nimm den unteren Körper mit der Fußplatte und dem halben Bein
+e) Konstuiere eine Hilfsachse , die durch das Bein geht
+f) diese Hilfsachse ist die Rotationsachse, rotiere den Fusskörper um 180 grad
+g) verschmelze die beiden wieder zum Gesamtkörper
+*/
+
 /** Hauptfunktion (Orchestrator) */
 export function run(_context: string): void {
   try {
@@ -23,7 +34,7 @@ export function run(_context: string): void {
     const params = setupParameters(design);
 
     // 2. Ersten Tetrapod (Node 1) im Ursprung (0,0,0) erzeugen (Arm 0: Bein, Arm 1: kurz, Arm 2 & 3: 8cm Gewindearme)
-    const targetBody = createTetrapod(rootComp, params, ['leg', 'short', 'threaded', 'threaded']);
+    let targetBody = createTetrapod(rootComp, params, ['leg', 'short', 'threaded', 'threaded']);
     targetBody.name = 'Node_1';
 
     // 3. Kugel aus dem Zentrum von Node 1 ausschneiden (Zentralknoten hohl machen)
@@ -55,6 +66,9 @@ export function run(_context: string): void {
     // 7. Verbindungsröhren (ID 31.5mm, OD 46mm, Länge 45mm mittig) erzeugen und verschmelzen
     createConnectionTube1To2(rootComp, params, targetBody, node2);
     createConnectionTube2To3(rootComp, params, targetBody, node3, center2);
+
+    // 7b. Drehung des Fußes gemäß TODO a-g (Ebene -50mm, Split Body, 180° Rotation um Beinachse, Re-Join)
+    targetBody = rotateFootBySplittingLeg(rootComp, targetBody);
 
     // 8. Abfasung (0.7mm) der 2 Kabelkanal-Lochkanten am fertigen Gesamtkörper durchführen
     chamferCableHoleOpenings(rootComp, params, targetBody);
@@ -170,8 +184,8 @@ function setupParameters(design: adsk.fusion.Design) {
     basePlateHeight: getOrCreateParam('base_plate_height', '10mm', 'mm', 'Höhe der runden Basis-Platte'),
     basePlateRounding: getOrCreateParam('base_plate_rounding', '2mm', 'mm', 'Abrundung der oberen Basis-Platte-Kante'),
     legLength: getOrCreateParam('leg_length', '100mm', 'mm', 'Länge des Beins von Node 1 zur Basis-Platte'),
-    legAngle: getOrCreateParam('leg_angle', '100deg', 'deg', 'Winkel des Beines zur Basis-Platte'),
-    // legAngle: getOrCreateParam('leg_angle', '109.47122063449069deg', 'deg', 'Winkel des Beines zur Basis-Platte (parallel zum Verbindungsarm Node 1 -> Node 2)'),
+    // legAngle: getOrCreateParam('leg_angle', '100deg', 'deg', 'Winkel des Beines zur Basis-Platte'),
+    legAngle: getOrCreateParam('leg_angle', '109.47122063449069deg', 'deg', 'Winkel des Beines zur Basis-Platte (parallel zum Verbindungsarm Node 1 -> Node 2)'),
     legOffset: getOrCreateParam('leg_offset', '45mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
     legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante zwischen Bein und Basis-Platte'),
     cableHoleOffset: getOrCreateParam('cable_hole_offset', '90mm', 'mm', 'Versatz der Kabelkanal-Konstruktionsebene'),
@@ -914,6 +928,85 @@ function createConnectionTube2To3(
   combineInput.operation = adsk.fusion.FeatureOperations.JoinFeatureOperation;
   combineFeatures.add(combineInput);
 }
+
+/**
+ * Führt die Drehung des Fußes gemäß TODO a-g aus:
+ * b) Konstruiert eine Ebene parallel zur XY-Ebene versetzt um -50mm (0, 0, -50mm)
+ * c) Schneidet den Körper mit dieser Ebene (Split Body)
+ * d) Identifiziert den unteren Körper mit Fußplatte und halbem Bein
+ * e) Konstruiert eine Hilfsachse durch das Bein
+ * f) Rotiert den Fußkörper um 180° um diese Hilfsachse
+ * g) Verschmelzt die beiden Körper wieder zum Gesamtkörper
+ */
+function rotateFootBySplittingLeg(
+  rootComp: adsk.fusion.Component,
+  targetBody: adsk.fusion.BRepBody
+): adsk.fusion.BRepBody {
+  const constructionPlanes = rootComp.constructionPlanes;
+  const splitBodyFeatures = rootComp.features.splitBodyFeatures;
+  const constructionAxes = rootComp.constructionAxes;
+  const moveFeatures = rootComp.features.moveFeatures;
+  const combineFeatures = rootComp.features.combineFeatures;
+
+  // b) Ebene parallel zu XY-Ebene bei Z = -50mm (-5.0 cm) erstellen
+  const planeInput = constructionPlanes.createInput();
+  planeInput.setByOffset(rootComp.xYConstructionPlane, adsk.core.ValueInput.createByReal(-5.0));
+  const splitPlane = constructionPlanes.add(planeInput);
+
+  // c) Gesamtkörper mit dieser Ebene trennen (Split Body)
+  const splitInput = splitBodyFeatures.createInput(targetBody, splitPlane, true);
+  if (!splitInput) {
+    console.warn('SplitBodyInput konnte nicht erstellt werden.');
+    return targetBody;
+  }
+  const splitFeature = splitBodyFeatures.add(splitInput);
+  if (!splitFeature) {
+    console.warn('SplitBodyFeature konnte nicht ausgeführt werden.');
+    return targetBody;
+  }
+
+  // d) Unteren Körper (mit Fußplatte und halbem Bein, min Z < -6.0 cm) ermitteln
+  let footBody: adsk.fusion.BRepBody | null = null;
+  let mainBody: adsk.fusion.BRepBody | null = null;
+
+  for (let i = 0; i < rootComp.bRepBodies.count; i++) {
+    const b = rootComp.bRepBodies.item(i);
+    if (!b) continue;
+    if (b.boundingBox.minPoint.z < -6.0) {
+      footBody = b;
+    } else {
+      mainBody = b;
+    }
+  }
+
+  if (!footBody || !mainBody) {
+    console.warn('Fußkörper oder Hauptkörper nach Split nicht gefunden.');
+    return targetBody;
+  }
+
+  // e) Hilfsachse durch das Bein konstruieren (Schnitt der XZ- und YZ-Ebenen, verläuft mittig durch das Bein)
+  const axisInput = constructionAxes.createInput();
+  axisInput.setByTwoPlanes(rootComp.xZConstructionPlane, rootComp.yZConstructionPlane);
+  const legAxis = constructionAxes.add(axisInput);
+
+  // f) Fußkörper um 180 Grad um die Hilfsachse rotieren
+  const moveColl = adsk.core.ObjectCollection.create();
+  moveColl.add(footBody);
+  const moveInput = moveFeatures.createInput2(moveColl);
+  const rotationAxisEntity = legAxis ? legAxis : rootComp.zConstructionAxis;
+  moveInput.defineAsRotate(rotationAxisEntity, adsk.core.ValueInput.createByString('180deg'));
+  moveFeatures.add(moveInput);
+
+  // g) Beide Körper wieder zum Gesamtkörper verschmelzen
+  const toolColl = adsk.core.ObjectCollection.create();
+  toolColl.add(footBody);
+  const combineInput = combineFeatures.createInput(mainBody, toolColl);
+  combineInput.operation = adsk.fusion.FeatureOperations.JoinFeatureOperation;
+  combineFeatures.add(combineInput);
+
+  return mainBody;
+}
+
 
 /**
  * Erzeugt das vertikale Bein von Node 1 (entlang der Z-Achse nach unten, zeigt direkt auf das Zentrum von Node 1).
