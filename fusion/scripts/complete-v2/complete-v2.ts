@@ -64,7 +64,10 @@ export function run(_context: string): void {
     // 7b. Drehung des Fußes gemäß TODO a-g (Ebene -50mm, Split Body, 180° Rotation um Beinachse, Re-Join)
     targetBody = rotateFootBySplittingLeg(rootComp, targetBody);
 
-    // 10. Abrundung (40mm, Tangential G1, Radiustyp: Konstante, Ecktyp: Versatz) der 18 Knoten-Schnittkanten durchführen
+    // 10a. Alle 3 Körper (Node 1, Node 2, Node 3 und Röhren) zum Gesamtkörper verschmelzen
+    targetBody = combineAllBodies(rootComp, targetBody);
+
+    // 10b. Abrundung (40mm, Tangential G1, Radiustyp: Konstante, Ecktyp: Versatz) der 18 Knoten-Schnittkanten durchführen
     applyNodeFilletsAtEnd(rootComp, targetBody, params, center2, center3);
 
     // 8. Abfasung (0.7mm) der 2 Kabelkanal-Lochkanten am fertigen Gesamtkörper durchführen
@@ -1014,6 +1017,55 @@ function rotateFootBySplittingLeg(
 }
 
 /**
+ * Verschmilzt alle im Design vorhandenen Körper (Node 1, Node 2, Node 3 und Verbindungsstücke)
+ * zu einem einzigen Gesamtkörper.
+ */
+function combineAllBodies(
+  rootComp: adsk.fusion.Component,
+  targetBody: adsk.fusion.BRepBody
+): adsk.fusion.BRepBody {
+  const bodies = rootComp.bRepBodies;
+  if (bodies.count <= 1) {
+    return targetBody;
+  }
+
+  const toolColl = adsk.core.ObjectCollection.create();
+  let mainBody = targetBody;
+
+  for (let i = 0; i < bodies.count; i++) {
+    const b = bodies.item(i);
+    if (!b) continue;
+    if (b === mainBody) continue;
+    toolColl.add(b);
+  }
+
+  if (toolColl.count === 0) {
+    return mainBody;
+  }
+
+  const combineFeatures = rootComp.features.combineFeatures;
+  const combineInput = combineFeatures.createInput(mainBody, toolColl);
+  combineInput.operation = adsk.fusion.FeatureOperations.JoinFeatureOperation;
+
+  try {
+    const combineFeat = combineFeatures.add(combineInput);
+    if (combineFeat && combineFeat.bodies.count > 0) {
+      const resBody = combineFeat.bodies.item(0);
+      if (resBody) return resBody;
+    }
+  } catch (e) {
+    console.warn(`Fehler beim Verschmelzen aller Körper: ${e}`);
+  }
+
+  if (rootComp.bRepBodies.count > 0) {
+    const b = rootComp.bRepBodies.item(0);
+    if (b) return b;
+  }
+
+  return mainBody;
+}
+
+/**
  * Step 11: Richtet den Gesamtkörper so aus, dass die untere Stirnfläche der Fußplatte
  * exakt auf der XY-Konstruktionsebene (Z = 0) liegt und das gesamte Gebilde auf dem Fuß steht.
  *
@@ -1047,41 +1099,101 @@ function alignFootToXYPlane(
     return;
   }
 
-  const planeGeom = footBottomFace.geometry as adsk.core.Plane;
-  const normal = planeGeom.normal;
+  // Normalenvektor und Punkt auf der Unterseite ermitteln
   const pointOnFace = footBottomFace.pointOnFace;
+  let normal: adsk.core.Vector3D | null = null;
 
-  // 2. Transformationsmatrix erstellen:
-  // Normale der Unterseite nach unten (0, 0, -1) ausrichten
-  const transformMatrix = adsk.core.Matrix3D.create();
-  transformMatrix.setToRotateTo(normal, adsk.core.Vector3D.create(0, 0, -1));
+  try {
+    const evaluator = footBottomFace.evaluator;
+    if (evaluator) {
+      const [success, evalNormal] = evaluator.getNormalAtPoint(pointOnFace);
+      if (success && evalNormal) {
+        normal = evalNormal;
+      }
+    }
+  } catch (_e) { }
 
-  // Punkt auf der Unterseite transformieren und Verschiebung berechnen, sodass Z = 0 wird
-  const pointCopy = pointOnFace.copy();
-  pointCopy.transformBy(transformMatrix);
+  if (!normal) {
+    const planeGeom = footBottomFace.geometry as adsk.core.Plane;
+    normal = planeGeom.normal;
+  }
 
-  const shiftVec = adsk.core.Vector3D.create(-pointCopy.x, -pointCopy.y, -pointCopy.z);
-  const transMat = adsk.core.Matrix3D.create();
-  transMat.translation = shiftVec;
-  transformMatrix.transformBy(transMat);
+  normal.normalize();
 
-  // Transformation auf den Körper anwenden
-  const moveFeatures = rootComp.features.moveFeatures;
-  const moveColl = adsk.core.ObjectCollection.create();
-  moveColl.add(body);
-  const moveInput = moveFeatures.createInput2(moveColl);
-  moveInput.defineAsFreeMove(transformMatrix);
-  moveFeatures.add(moveInput);
+  // Target-Normalenvektor nach unten: (0, 0, -1)
+  const targetNormal = adsk.core.Vector3D.create(0, 0, -1);
+  const moveFeats = rootComp.features.moveFeatures;
 
-  // Plausibilitätsprüfung: Falls der Körper nach der Drehung nach unten statt nach oben zeigt, 180° um X-Achse drehen
-  if (body.boundingBox.maxPoint.z < 1.0) {
+  // 2. Schritt 1: Drehung um pointOnFace ausführen, damit die Unterseite waagerecht wird
+  const rotAxis = normal.crossProduct(targetNormal);
+  const dotVal = Math.min(1.0, Math.max(-1.0, normal.dotProduct(targetNormal)));
+  const rotAngle = Math.acos(dotVal);
+
+  if (rotAxis.length > 1e-4 && rotAngle > 1e-4) {
+    rotAxis.normalize();
+    const rotMatrix = adsk.core.Matrix3D.create();
+    rotMatrix.setToRotation(rotAngle, rotAxis, pointOnFace);
+
+    const moveColl1 = adsk.core.ObjectCollection.create();
+    moveColl1.add(body);
+    const moveInput1 = moveFeats.createInput2(moveColl1);
+    moveInput1.defineAsFreeMove(rotMatrix);
+    try {
+      moveFeats.add(moveInput1);
+    } catch (e) {
+      console.warn(`Fehler bei Rotation in Step 11: ${e}`);
+    }
+  }
+
+  // 3. Unterste ebene Fläche nach der Drehung erneut ermitteln, um die neue Z-Position exakt zu bestimmen
+  footBottomFace = null;
+  minZ = Infinity;
+  for (let i = 0; i < body.faces.count; i++) {
+    const face = body.faces.item(i);
+    if (!face) continue;
+    if (face.geometry.surfaceType === adsk.core.SurfaceTypes.PlaneSurfaceType) {
+      const bb = face.boundingBox;
+      const centerZ = (bb.minPoint.z + bb.maxPoint.z) / 2.0;
+      if (centerZ < minZ) {
+        minZ = centerZ;
+        footBottomFace = face;
+      }
+    }
+  }
+
+  if (!footBottomFace) {
+    console.warn('Unterseite der Fußplatte nach Drehung für Step 11 nicht gefunden.');
+    return;
+  }
+
+  // 4. Schritt 2: Verschieben, so dass der Mittelpunkt der Unterseite auf (0, 0, 0) liegt (Z = 0)
+  const newPoint = footBottomFace.pointOnFace;
+  const shiftVec = adsk.core.Vector3D.create(-newPoint.x, -newPoint.y, -newPoint.z);
+
+  const transMatrix = adsk.core.Matrix3D.create();
+  transMatrix.translation = shiftVec;
+
+  const moveColl2 = adsk.core.ObjectCollection.create();
+  moveColl2.add(body);
+  const moveInput2 = moveFeats.createInput2(moveColl2);
+  moveInput2.defineAsFreeMove(transMatrix);
+  try {
+    moveFeats.add(moveInput2);
+  } catch (e) {
+    console.warn(`Fehler bei Translation in Step 11: ${e}`);
+  }
+
+  // 5. Plausibilitätsprüfung: Falls der Körper nach der Drehung nach unten zeigt, 180° um X-Achse drehen
+  if (body.boundingBox.maxPoint.z < 0.5) {
     const flipColl = adsk.core.ObjectCollection.create();
     flipColl.add(body);
-    const flipInput = moveFeatures.createInput2(flipColl);
+    const flipInput = moveFeats.createInput2(flipColl);
     const flipMat = adsk.core.Matrix3D.create();
     flipMat.setToRotation(Math.PI, adsk.core.Vector3D.create(1, 0, 0), adsk.core.Point3D.create(0, 0, 0));
     flipInput.defineAsFreeMove(flipMat);
-    moveFeatures.add(flipInput);
+    try {
+      moveFeats.add(flipInput);
+    } catch (_e) { }
   }
 
   console.log('Step 11: Das Gebilde wurde erfolgreich auf die XY-Ebene (Z = 0) gestellt.');
@@ -1806,8 +1918,4 @@ function applyNodeFilletsAtEnd(
     `Die 18 Kanten wurden blau im Modell markiert und erfolgreich mit 40 mm verrundet.`;
 
   console.log(msg);
-
-  if (ui) {
-    ui.messageBox(msg);
-  }
 }
