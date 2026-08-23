@@ -177,7 +177,7 @@ function setupParameters(design: adsk.fusion.Design) {
     ringInnerDiameter: getOrCreateParam('ring_inner_diameter', '40mm', 'mm', 'Durchmesser der erhabenen Stirnflaeche'),
     ringExtrudeDepth: getOrCreateParam('ring_extrude_depth', '17mm', 'mm', 'Tiefe des Rumpfabsatzes / Rücksprungs'),
     holeDepthOffset: getOrCreateParam('hole_depth_offset', '5mm', 'mm', 'Abstand vom Armende fuer Bohrungstiefe (arm_depth - offset)'),
-    holeDiameter: getOrCreateParam('hole_diameter', '31.5mm', 'mm', 'Durchmesser der zentrischen Bohrung'),
+    holeDiameter: getOrCreateParam('hole_diameter', '38mm', 'mm', 'Durchmesser der zentrischen Bohrung'),
     innerBallDiameter: getOrCreateParam('inner_ball_diameter', '42mm', 'mm', 'Durchmesser des ineren Kugelloches'),
     // Parameter für den Fuß / Basis-Platte (wie in al-base-plate-simple-cable-hole.ts)
     basePlateDiameter: getOrCreateParam('base_plate_diameter', '160mm', 'mm', 'Durchmesser der runden Basis-Platte'),
@@ -191,7 +191,8 @@ function setupParameters(design: adsk.fusion.Design) {
     cableHoleDiameter: getOrCreateParam('cable_hole_diameter', '6mm', 'mm', 'Durchmesser des Kabelkanallochs'),
     cableHoleHeight: getOrCreateParam('cable_hole_height', '4.5mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite'),
     cableHoleChamfer: getOrCreateParam('cable_hole_chamfer', '0.7mm', 'mm', 'Abfasung der Lochkanten des Kabelkanals'),
-    nodeFilletRadius: getOrCreateParam('node_fillet_radius', '40mm', 'mm', 'Radius fuer die Tetrapod-Knotenabrundung (40mm, Tangential G1, Konstante, Versatz)')
+    nodeFilletRadius: getOrCreateParam('node_fillet_radius', '40mm', 'mm', 'Radius fuer die Tetrapod-Knotenabrundung (40mm, Tangential G1, Konstante, Versatz)'),
+    footLegBoreDiameter: getOrCreateParam('foot_leg_bore_diameter', '36mm', 'mm', 'Durchmesser der Aufbohrung des Fussbeins (ca. 38mm)')
   };
 }
 
@@ -1216,7 +1217,7 @@ function createVerticalLegForNode1(
 
   const sketch = sketches.add(xyPlane);
   sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.armOuterDiameter.value / 2.0);
-  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.holeDiameter.value / 2.0);
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.footLegBoreDiameter.value / 2.0);
 
   let ringProfile: adsk.fusion.Profile | null = null;
   for (let i = 0; i < sketch.profiles.count; i++) {
@@ -1228,7 +1229,7 @@ function createVerticalLegForNode1(
   }
 
   if (!ringProfile) {
-    const holeArea = Math.PI * Math.pow(params.holeDiameter.value / 2.0, 2);
+    const holeArea = Math.PI * Math.pow(params.footLegBoreDiameter.value / 2.0, 2);
     for (let i = 0; i < sketch.profiles.count; i++) {
       const prof = sketch.profiles.item(i);
       if (Math.abs(prof.areaProperties().area - holeArea) > 0.1) {
@@ -1408,7 +1409,7 @@ function createTiltedBasePlateFoot(
 }
 
 /**
- * Schneidet die 31.5mm Innenbohrung des Z-Beins durchgehend durch die Basis-Platte frei.
+ * Schneidet die 38mm Aufbohrung des Z-Beins durchgehend durch die Basis-Platte frei.
  */
 function boreVerticalLegHole(
   rootComp: adsk.fusion.Component,
@@ -1421,7 +1422,7 @@ function boreVerticalLegHole(
 
   const sketch = sketches.add(rootComp.xYConstructionPlane);
   const center = adsk.core.Point3D.create(0, 0, 0);
-  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.holeDiameter.value / 2.0);
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.footLegBoreDiameter.value / 2.0);
 
   if (sketch.profiles.count === 0) return;
   const profile = sketch.profiles.item(0);
