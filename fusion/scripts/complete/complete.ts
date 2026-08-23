@@ -582,7 +582,7 @@ function addLongArmThread(
     const offsetFeatures = features.offsetFacesFeatures;
     const offsetInput = offsetFeatures.createInput(
       facesToOffset,
-      adsk.core.ValueInput.createByString("-0.1mm")
+      adsk.core.ValueInput.createByString("-0.15mm")
     );
     if (offsetInput) {
       offsetFeatures.add(offsetInput);
