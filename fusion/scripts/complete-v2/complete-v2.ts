@@ -195,7 +195,7 @@ function setupParameters(design: adsk.fusion.Design) {
     cableHoleHeight: getOrCreateParam('cable_hole_height', '5.0mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite'),
     cableHoleChamfer: getOrCreateParam('cable_hole_chamfer', '0.7mm', 'mm', 'Abfasung der Lochkanten des Kabelkanals'),
     nodeFilletRadius: getOrCreateParam('node_fillet_radius', '40mm', 'mm', 'Radius fuer die Tetrapod-Knotenabrundung (40mm, Tangential G1, Konstante, Versatz)'),
-    footLegBoreDiameter: getOrCreateParam('foot_leg_bore_diameter', '36mm', 'mm', 'Durchmesser der Aufbohrung des Fussbeins (ca. 38mm)')
+    footLegBoreDiameter: getOrCreateParam('foot_leg_bore_diameter', '38mm', 'mm', 'Durchmesser der Aufbohrung des Fussbeins (ca. 38mm)')
   };
 }
 
