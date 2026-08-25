@@ -64,8 +64,8 @@ function setupParameters(design: adsk.fusion.Design) {
     pipesDiameter: getOrCreateParam('pipes_diameter', '38mm', 'mm', 'Außendurchmesser des Verbinders an den Rippenspitzen'),
     innerHoleDiameter: getOrCreateParam('inner_hole_diameter', '34mm', 'mm', 'Durchmesser der durchgehenden inneren Bohrung'),
     connectorLength: getOrCreateParam('connector_length', '60mm', 'mm', 'Gesamtlänge des Verbindungsrohrs'),
-    stopRingWidth: getOrCreateParam('stop_ring_width', '3mm', 'mm', 'Breite des Anschlagrings in der Mitte (0mm = deaktiviert)'),
-    stopRingDiameter: getOrCreateParam('stop_ring_diameter', '46mm', 'mm', 'Außendurchmesser des Anschlagrings in der Mitte'),
+    stopRingWidth: getOrCreateParam('stop_ring_width', '2mm', 'mm', 'Breite des Anschlagrings in der Mitte (0mm = deaktiviert)'),
+    stopRingDiameter: getOrCreateParam('stop_ring_diameter', '38.5mm', 'mm', 'Außendurchmesser des Anschlagrings in der Mitte'),
     ribDepth: getOrCreateParam('rib_depth', '0.6mm', 'mm', 'Tiefe/Höhe der dreieckigen Lamellenrippen'),
     numRibs: getOrCreateParam('num_ribs', '36', '', 'Anzahl der umlaufenden Lamellenrippen (z. B. 36)'),
     chamferSize: getOrCreateParam('chamfer_size', '3mm', 'mm', 'Größe der Einführfasen an beiden Enden (3mm)')
