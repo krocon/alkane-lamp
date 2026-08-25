@@ -3,34 +3,30 @@ import { adsk } from "@adsk/fusion";
 const app = adsk.core.Application.get();
 const ui = app ? app.userInterface : null;
 
-/*
-
-# TODO Konstruiere ein Inlet, welches in ein Rohr mit 43mm Innendurchmesser geschoben werden kann
-
-arbeite nur an fusion/scripts/thread-inlet-m40x2_5-clearance-0_15/thread-inlet-m40x2_5-clearance-0_15.ts
-
-## Definiere folgende Parameter
-- stopperOuterDiameter: 46mm
-- stopperlength: 2 mm
-- pipesOuterDiameter: Außendurchmesser des Inlets an der Stopkante (mm)
-- pipeLength: 60mm
-- pipeInnerDiameter: 40mm
-- pipeOuterDiameter: 43mm
-- Gewinde: M40x2.5
-- Gewindespiel : -0.15mm
-
-## Konstruktionsschritte:
-- Erzeuge auf xy-Ebene eine Skizze
-- Zeichne 2 Kreise, pipeInnerDiameter und stopperOuterDiameter
-- Extrudiere Ring um pipeLength
-- Selektiere innere Röhre und erzeuge ein Gewinde von oben: M40x2.5, 6H, Rechts, Metrisch, volle Länge
-- Selektiere die 4 Gewindeflächen und erzeuge Gewindespiel von -0.15mm (Drücken/Ziehen)
-- Selektiere die obere Röhrenstirn (ring) und erzeuge dort eine Skizze
-- Zeichne dort einen Kreis von 43 mm.
-- Extrusion des Rings mit -58mm (2mm - pipeLength)
-- Grosser Step: erzeuge eine Riffelung an der Aussenseite der 43mm-Pipe-Bereichs, so dass sich das Inlet leicht in eine 43mm-große Rohre (PLA) schieben lässt.
-- Großer Step 2: Fase am Gewindeeingang (dort, wo Stopper ist), damit Schraube leichter reingeht.
-
+/**
+ * @file thread-inlet-m40x2_5-clearance-0_25.ts
+ * @description Fusion 360 Skript zur Erzeugung eines Gewinde-Inlets (M40x2.5 Innengewinde) für ein PLA-Rohr mit 43mm Innendurchmesser.
+ *
+ * ## Parameter:
+ * - stopperOuterDiameter: 46mm (Außendurchmesser der Stopkante)
+ * - stopperLength: 2mm (Dicke des Anschlagflansches)
+ * - pipeLength: 60mm (Gesamtlänge des Inlets)
+ * - pipeInnerDiameter: 40mm (Innendurchmesser der Kernbohrung)
+ * - pipeOuterDiameter: 43mm (Nenn-Außendurchmesser des Inlets)
+ * - pipeClearance: -0.2mm (Toleranz/Spiel für leichtes Einschieben in das 43mm PLA-Rohr -> eff. 42.8mm)
+ * - threadClearance: -0.25mm (Gewindespiel für leichtes Einschrauben der Lampenfassung via Offset Faces)
+ * - numRibs: 36 (Anzahl der Längsrillen/Riffelung am Außenumfang)
+ * - ribDepth: 0.4mm (Tiefe der Riffelungs-Lamellen)
+ * - threadChamfer: 1mm (Anfasung am Gewindeeingang an der Stopperseite)
+ *
+ * ## Konstruktionsschritte:
+ * 1. Skizze auf XY-Ebene mit Innendurchmesser (40mm) und Stopper-Außendurchmesser (46mm)
+ * 2. Ringextrusion auf Gesamtlänge (60mm)
+ * 3. M40x2.5 6H Innengewinde (volle Länge, modelliert)
+ * 4. Gewindeflächen-Offset von -0.25mm (Drücken/Ziehen für Gewindespiel)
+ * 5. Reduzierung des Außenbereichs oberhalb des Stoppers (Z=2mm bis 60mm) auf eff. 42.8mm (43mm + pipeClearance)
+ * 6. 36 Längsrillen (Riffelung) an der Außenwand für optimale Passung und geringe Reibung im PLA-Rohr
+ * 7. Einführfase (1mm) an der Unterseite des Gewindeeingangs am Stopper
  */
 
 /** Hauptfunktion (Orchestrator) */
@@ -53,9 +49,9 @@ export function run(_context: string): void {
 
     // 2. Inlet mit Innengewinde, Gewindespiel, Stopperflansch, Außendurchmesser-Reduktion, Riffelung & Gewindeeingangs-Fase erzeugen
     const targetBody = createInlet(rootComp, params);
-    targetBody.name = 'thread-inlet-m40x2_5-clearance-0_15';
+    targetBody.name = 'thread-inlet-m40x2_5-clearance-0_25';
 
-    console.log('Thread-Inlet M40x2.5 (Clearance -0.15mm) erfolgreich generiert!');
+    console.log('Thread-Inlet M40x2.5 (Gewindespiel -0.25mm, Rohrspiel -0.2mm) erfolgreich generiert!');
 
   } catch (e) {
     console.error(`Failed: ${e}`);
@@ -96,8 +92,9 @@ function setupParameters(design: adsk.fusion.Design) {
     pipesOuterDiameter: getOrCreateParam('pipes_outer_diameter', '43mm', 'mm', 'Außendurchmesser des Inlets an der Stopkante'),
     pipeLength: getOrCreateParam('pipe_length', '60mm', 'mm', 'Gesamtlänge des Inlets'),
     pipeInnerDiameter: getOrCreateParam('pipe_inner_diameter', '40mm', 'mm', 'Innendurchmesser des Inlets (Gewindebohrung)'),
-    pipeOuterDiameter: getOrCreateParam('pipe_outer_diameter', '43mm', 'mm', 'Außendurchmesser des Inlets (Röhrenbereich)'),
-    threadClearance: getOrCreateParam('thread_clearance', '-0.15mm', 'mm', 'Gewindespiel (Drücken/Ziehen)'),
+    pipeOuterDiameter: getOrCreateParam('pipe_outer_diameter', '43mm', 'mm', 'Nenn-Außendurchmesser des Inlets (Röhrenbereich)'),
+    pipeClearance: getOrCreateParam('pipe_clearance', '-0.2mm', 'mm', 'Spiel/Toleranz für den Außendurchmesser des Inlets (-0.2mm)'),
+    threadClearance: getOrCreateParam('thread_clearance', '-0.25mm', 'mm', 'Gewindespiel (Drücken/Ziehen)'),
     numRibs: getOrCreateParam('num_ribs', '36', '', 'Anzahl der Riffelungs-Lamellen'),
     ribDepth: getOrCreateParam('rib_depth', '0.4mm', 'mm', 'Tiefe der Riffelungs-Rillen'),
     threadChamfer: getOrCreateParam('thread_chamfer', '1mm', 'mm', 'Fase am Gewindeeingang')
@@ -124,8 +121,10 @@ function createInlet(
   const stopperLen = params.stopperLength.value; // e.g. 0.2 cm
   const pipeLen = params.pipeLength.value; // e.g. 6.0 cm
   const pipeID = params.pipeInnerDiameter.value; // e.g. 4.0 cm
-  const pipeOD = params.pipeOuterDiameter.value; // e.g. 4.3 cm
-  const clearanceStr = params.threadClearance.expression || '-0.15mm';
+  const nominalPipeOD = params.pipeOuterDiameter.value; // e.g. 4.3 cm
+  const pipeClearanceVal = params.pipeClearance.value; // e.g. -0.02 cm (-0.2mm)
+  const effectivePipeOD = Math.max(pipeID + 0.1, nominalPipeOD + pipeClearanceVal); // e.g. 4.28 cm (42.8mm)
+  const clearanceStr = params.threadClearance.expression || '-0.25mm';
 
   // Schritt 1 & 2: Erzeuge auf XY-Ebene eine Skizze mit 2 Kreisen (pipeInnerDiameter & stopperOuterDiameter)
   const sketchXY = sketches.add(rootComp.xYConstructionPlane);
@@ -173,14 +172,14 @@ function createInlet(
 
   const targetBody = baseExtrudeFeature.bodies.item(0);
 
-  // Schritt 4 & 5: Innengewinde M40x2.5 (volle Länge) & Gewindespiel -0.15mm (Drücken/Ziehen)
+  // Schritt 4 & 5: Innengewinde M40x2.5 (volle Länge) & Gewindespiel -0.25mm (Drücken/Ziehen)
   addInternalThreadAndClearance(rootComp, targetBody, pipeID / 2.0, clearanceStr);
 
-  // Schritt 6, 7 & 8: Skizze auf oberer Stirnfläche (Z = pipeLength), Kreis 43mm, Extrusion -58mm (Cut)
-  cutOuterPipeDiameter(rootComp, pipeLen, stopperLen, stopperOD / 2.0, pipeOD / 2.0);
+  // Schritt 6, 7 & 8: Skizze auf oberer Stirnfläche (Z = pipeLength), Kreis für eff. Außendurchmesser (42.8mm), Extrusion -58mm (Cut)
+  cutOuterPipeDiameter(rootComp, pipeLen, stopperLen, stopperOD / 2.0, effectivePipeOD / 2.0);
 
-  // Schritt 9: Riffelung an der Außenseite des 43mm-Pipe-Bereichs (Längslamellen)
-  addOuterRiffelung(rootComp, pipeLen, stopperLen, pipeOD / 2.0, params.ribDepth.value, Math.round(params.numRibs.value));
+  // Schritt 9: Riffelung an der Außenseite des Pipe-Bereichs (Längslamellen)
+  addOuterRiffelung(rootComp, pipeLen, stopperLen, effectivePipeOD / 2.0, params.ribDepth.value, Math.round(params.numRibs.value));
 
   // Schritt 10: Fase am Gewindeeingang am Stopper-Ende (Z = 0)
   addEntranceChamfer(rootComp, targetBody, params.threadChamfer.value);
@@ -190,7 +189,7 @@ function createInlet(
 
 /**
  * Erstellt ein Innengewinde M40x2.5 (volle Länge) an der Innenwand der Röhre
- * und wendet ein Gewindespiel von -0.15mm via Drücken/Ziehen (Offset Faces) an.
+ * und wendet ein Gewindespiel von -0.25mm via Drücken/Ziehen (Offset Faces) an.
  */
 function addInternalThreadAndClearance(
   rootComp: adsk.fusion.Component,
@@ -238,7 +237,7 @@ function addInternalThreadAndClearance(
     throw new Error('Fehler beim Erstellen des Gewinde-Features.');
   }
 
-  // Gewindeflächen selektieren und Gewindespiel von -0.15mm via Drücken/Ziehen anwenden
+  // Gewindeflächen selektieren und Gewindespiel (-0.25mm) via Drücken/Ziehen anwenden
   const facesToOffset: adsk.fusion.BRepFace[] = [];
   for (let i = 0; i < threadFeature.faces.count; i++) {
     const f = threadFeature.faces.item(i);
@@ -261,7 +260,7 @@ function addInternalThreadAndClearance(
 
 /**
  * Selektiert die obere Röhrenstirn (Z = pipeLength) und schneidet den äußeren Ring
- * ab Z = 2mm (stopperLength) auf den Außendurchmesser 43mm mit Extrusion -58mm zurück.
+ * ab Z = 2mm (stopperLength) auf den effektiven Außendurchmesser (43mm + pipeClearance) mit Extrusion -58mm zurück.
  */
 function cutOuterPipeDiameter(
   rootComp: adsk.fusion.Component,
@@ -284,11 +283,11 @@ function cutOuterPipeDiameter(
   const center3D = adsk.core.Point3D.create(0, 0, pipeLenCm);
   const centerPt = sketch.modelToSketchSpace(center3D);
 
-  // 43mm Kreis (pipeOuterDiameter) & 46mm+ Kreis zur Abgrenzung des äußeren Schnittrings
+  // Effektiver Außendurchmesser-Kreis & 46mm+ Kreis zur Abgrenzung des äußeren Schnittrings
   sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPt, pipeRadiusCm);
   sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPt, stopperRadiusCm + 0.5);
 
-  // Äußeres Ringprofil (zwischen 43mm und 46mm+) identifizieren
+  // Äußeres Ringprofil finden
   let outerCutProfile: adsk.fusion.Profile | null = null;
   for (let i = 0; i < sketch.profiles.count; i++) {
     const prof = sketch.profiles.item(i);
@@ -311,7 +310,7 @@ function cutOuterPipeDiameter(
   }
 
   if (!outerCutProfile) {
-    throw new Error('Konnte Profil zum Reduzieren des Außendurchmessers auf 43mm nicht finden.');
+    throw new Error('Konnte Profil zum Reduzieren des Außendurchmessers nicht finden.');
   }
 
   // Extrusion (Cut) um -58mm (stopperLength - pipeLength = 2mm - 60mm)
@@ -329,7 +328,7 @@ function cutOuterPipeDiameter(
 }
 
 /**
- * Erzeugt eine Riffelung (36 umlaufende V-Kerben / Lamellen) an der Außenseite des 43mm-Pipe-Bereichs.
+ * Erzeugt eine Riffelung (36 umlaufende V-Kerben / Lamellen) an der Außenseite des Pipe-Bereichs.
  * Ermöglicht ein leichtes Hineinschieben und präzises Klemmen in ein PLA-Rohr mit 43mm Innendurchmesser.
  */
 function addOuterRiffelung(
@@ -353,13 +352,13 @@ function addOuterRiffelung(
   const topPlane = rootComp.constructionPlanes.add(planeInput);
   const sketch = rootComp.sketches.add(topPlane);
 
-  const rOuter = pipeRadiusCm; // 2.15 cm (43mm OD)
-  const rRoot = Math.max(0.1, rOuter - ribDepthCm); // e.g. 2.11 cm (42.2mm OD)
+  const rOuter = pipeRadiusCm;
+  const rRoot = Math.max(0.1, rOuter - ribDepthCm);
 
   const dAngle = (2.0 * Math.PI) / numRibs;
   const lines = sketch.sketchCurves.sketchLines;
 
-  // 36 gleichmäßig verteilte V-förmige Einkerbungen entlang des 43mm Außenumfangs zeichnen
+  // 36 gleichmäßig verteilte V-förmige Einkerbungen entlang des Außenumfangs zeichnen
   for (let i = 0; i < numRibs; i++) {
     const angleCenter = i * dAngle;
     const angleLeft = angleCenter - dAngle * 0.25;
