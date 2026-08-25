@@ -4,27 +4,25 @@ const app = adsk.core.Application.get();
 const ui = app ? app.userInterface : null;
 
 /**
- * @file thread-inlet-m40x2_5-clearance-0_15.ts
- * @description Fusion 360 Skript zur Erzeugung einer dauerhaft festsitzenden, verdrehsicheren
- * Steckverbindung für ein PLA-Rohr mit exakt 42.0 mm Innendurchmesser (optimiert für FDM-3D-Druck auf Bambu Lab P2S).
+ * @file thread-inlet-m40x2_5.ts
+ * @description Fusion 360 Skript zur Erzeugung einer dauerhaft festsitzenden Steckverbindung
+ * für ein PLA-Rohr mit 43.0 mm Nenn-Innendurchmesser (optimiert für FDM-3D-Druck auf Bambu Lab P2S).
  *
  * ## Konstruktionsprinzip & FDM-Optimierung:
- * - 8 gerundete Längs-Klemmrippen mit weicher cos^4-Wölbung (keine scharfen Kanten, keine Kerbwirkung)
- * - Nenn-Innendurchmesser des Rohres: 42.0 mm
- * - Außendurchmesser des Inlet-Grundkörpers: 41.2 mm (0.8 mm Durchmesser-Spiel zur Reduzierung von Reibung)
- * - Außendurchmesser über den 8 Klemmrippen: 42.85 mm (< 43.00 mm)
- * - Konische Einführzone (3.0 mm Länge am Rohreingang) für beschädigungsfreie und leichte Montage
- * - M40x2.5 Innengewinde mit -0.25 mm Gewindespiel (Offset Faces) für leichtgängiges Einschrauben
+ * - Glatter zylindrischer Schaft (keine Klemmrippen)
+ * - Nenn-Außendurchmesser: 43.0 mm
+ * - Außendurchmesser-Passungsspiel (outer_clearance): -0.2 mm (effektiver Außendurchmesser 42.8 mm)
+ * - Konische Einführzone (3.0 mm Länge am Rohreingang) für leichte Montage
+ * - M40x2.5 Innengewinde mit -0.2 mm Gewindespiel (thread_clearance via Offset Faces) für leichtgängiges Einschrauben
  * - 1.0 mm Fase am Gewindeeingang der Stopperseite
  *
  * ## Technische CAD-Kennwerte:
- * - Grundkörper-Außendurchmesser: 41.2 mm
- * - Spitzendurchmesser über Rippen: 42.85 mm (< 43.00 mm)
- * - Anzahl Klemmrippen: 8 (gleichmäßig 45° verteilt)
- * - Maximale Rippenhöhe: 0.825 mm (radial über Grundkörper)
- * - Klemm-Übermaß: +0.425 mm radial / +0.85 mm im Durchmesser (bezogen auf 42.0 mm Rohr-ID)
+ * - Nenn-Außendurchmesser: 43.0 mm
+ * - Passungsspiel Außendurchmesser: -0.2 mm -> Effektiver Außendurchmesser: 42.8 mm
+ * - Gewindespiel (thread_clearance): -0.2 mm
+ * - Stopper-Außendurchmesser: 46.0 mm
+ * - Gesamtlänge: 40.0 mm
  * - Einführfase / Anlaufzone: 3.0 mm konischer Übergang
- * - Gerippte Klemmlänge: 35.0 mm (von Z = 2.0 mm bis Z = 37.0 mm)
  */
 
 /** Hauptfunktion (Orchestrator) */
@@ -45,11 +43,11 @@ export function run(_context: string): void {
     // 1. Parameter definieren
     const params = setupParameters(design);
 
-    // 2. Inlet mit gerundeten Klemmrippen, Einführzone, Innengewinde & Gewindespiel erzeugen
+    // 2. Inlet mit glattem Schaft, Einführzone, Innengewinde & Gewindespiel erzeugen
     const targetBody = createInlet(rootComp, params);
-    targetBody.name = 'thread-inlet-m40x2_5-pressfit-42mm';
+    targetBody.name = 'thread-inlet-m40x2_5-fit-43mm';
 
-    console.log('Thread-Inlet M40x2.5 (Passung 42.0mm Rohr, 8 Klemmrippen 42.85mm) erfolgreich generiert!');
+    console.log('Thread-Inlet M40x2.5 (Passung 43.0mm Rohr, Außendurchmesser 42.8mm, thread_clearance -0.2mm) erfolgreich generiert!');
 
   } catch (e) {
     console.error(`Failed: ${e}`);
@@ -89,12 +87,11 @@ function setupParameters(design: adsk.fusion.Design) {
     stopperLength: getOrCreateParam('stopper_length', '2mm', 'mm', 'Länge/Dicke der Stopkante'),
     pipeLength: getOrCreateParam('pipe_length', '40mm', 'mm', 'Gesamtlänge des Inlets'),
     pipeInnerDiameter: getOrCreateParam('pipe_inner_diameter', '40mm', 'mm', 'Innendurchmesser des Inlets (Gewindebohrung)'),
-    tubeInnerDiameter: getOrCreateParam('tube_inner_diameter', '42mm', 'mm', 'Nenn-Innendurchmesser des Aufnahme-Rohres (42.0mm)'),
-    pipeBaseDiameter: getOrCreateParam('pipe_base_diameter', '41.2mm', 'mm', 'Außendurchmesser des Inlet-Grundkörpers (0.8mm Spiel)'),
-    ribTipDiameter: getOrCreateParam('rib_tip_diameter', '42.85mm', 'mm', 'Außendurchmesser über den 8 Klemmrippen (< 43.00mm)'),
-    numRibs: getOrCreateParam('num_ribs', '8', '', 'Anzahl der gerundeten Klemmrippen (6-8)'),
+    tubeInnerDiameter: getOrCreateParam('tube_inner_diameter', '43mm', 'mm', 'Nenn-Innendurchmesser des Aufnahme-Rohres (43.0mm)'),
+    outerDiameter: getOrCreateParam('outer_diameter', '43mm', 'mm', 'Nenn-Außendurchmesser des Inlets (43.0mm)'),
+    outerClearance: getOrCreateParam('outer_clearance', '-0.2mm', 'mm', 'Passung/Spiel Außendurchmesser (-0.2mm)'),
     leadInLength: getOrCreateParam('lead_in_length', '3mm', 'mm', 'Länge der konischen Einführzone am Rohreingang'),
-    threadClearance: getOrCreateParam('thread_clearance', '-0.25mm', 'mm', 'Gewindespiel (Drücken/Ziehen)'),
+    threadClearance: getOrCreateParam('thread_clearance', '-0.2mm', 'mm', 'Gewindespiel (Drücken/Ziehen)'),
     threadChamfer: getOrCreateParam('thread_chamfer', '1mm', 'mm', 'Fase am Gewindeeingang an der Stopperseite')
   };
 }
@@ -117,13 +114,12 @@ function createInlet(
   // Dimensionen in Zentimeter (Fusion 360 API Standardeinheit)
   const stopperOD = params.stopperOuterDiameter.value; // e.g. 4.6 cm
   const stopperLen = params.stopperLength.value; // e.g. 0.2 cm
-  const pipeLen = params.pipeLength.value; // e.g. 6.0 cm
+  const pipeLen = params.pipeLength.value; // e.g. 4.0 cm
   const pipeID = params.pipeInnerDiameter.value; // e.g. 4.0 cm
-  const baseOD = params.pipeBaseDiameter.value; // e.g. 4.12 cm
-  const ribTipOD = params.ribTipDiameter.value; // e.g. 4.285 cm (< 4.30 cm)
-  const numRibs = Math.max(4, Math.min(16, Math.round(params.numRibs.value))); // e.g. 8
+  const outerDiameterCm = params.outerDiameter.value + params.outerClearance.value; // e.g. 4.3 + (-0.02) = 4.28 cm (42.8mm)
+  const outerRadiusCm = outerDiameterCm / 2.0; // 2.14 cm
   const leadInLen = params.leadInLength.value; // e.g. 0.3 cm
-  const clearanceStr = params.threadClearance.expression || '-0.25mm';
+  const clearanceStr = params.threadClearance.expression || '-0.2mm';
 
   // 1. Skizze auf XY-Ebene für den Stopperflansch (0 bis stopperLen = 2mm)
   const sketchXY = sketches.add(rootComp.xYConstructionPlane);
@@ -165,13 +161,13 @@ function createInlet(
   }
   const targetBody = stopperFeature.bodies.item(0);
 
-  // 2. Gerippten Schaft mit 8 weich gerundeten Klemmrippen erzeugen (von Z = stopperLen bis Z = pipeLen, d.h. 2mm bis 40mm)
-  createRibbedShaft(rootComp, stopperLen, pipeLen - stopperLen, pipeID / 2.0, baseOD / 2.0, ribTipOD / 2.0, numRibs);
+  // 2. Glatten zylindrischen Schaft erzeugen (von Z = stopperLen bis Z = pipeLen, d.h. 2mm bis 40mm)
+  createShaft(rootComp, stopperLen, pipeLen - stopperLen, pipeID / 2.0, outerRadiusCm);
 
   // 3. Konische Einführzone (3mm Lead-In Chamfer am Z=40mm Ende)
-  createLeadInChamfer(rootComp, pipeLen, leadInLen, ribTipOD / 2.0);
+  createLeadInChamfer(rootComp, pipeLen, leadInLen, outerRadiusCm);
 
-  // 4. M40x2.5 Innengewinde mit -0.25mm Spiel (Offset Faces)
+  // 4. M40x2.5 Innengewinde mit -0.2mm Spiel (Offset Faces)
   addInternalThreadAndClearance(rootComp, targetBody, pipeID / 2.0, clearanceStr);
 
   // 5. Gewindeeingangs-Fase (1mm) an der Stopper-Unterseite (Z = 0)
@@ -181,17 +177,14 @@ function createInlet(
 }
 
 /**
- * Erzeugt den Hauptschaft des Inlets mit N weich gerundeten Längs-Klemmrippen
- * basierend auf einer C2-stetigen cos^4-Wölbung ohne Kerbwirkung.
+ * Erzeugt den glatten zylindrischen Hauptschaft des Inlets (ohne Klemmrippen).
  */
-function createRibbedShaft(
+function createShaft(
   rootComp: adsk.fusion.Component,
   startZCm: number,
   shaftLenCm: number,
   innerRadiusCm: number,
-  baseRadiusCm: number,
-  ribTipRadiusCm: number,
-  numRibs: number
+  outerRadiusCm: number
 ): void {
   const extrudeFeatures = rootComp.features.extrudeFeatures;
   const sketches = rootComp.sketches;
@@ -208,44 +201,11 @@ function createRibbedShaft(
   const center3D = adsk.core.Point3D.create(0, 0, startZCm);
   const centerPt = sketch.modelToSketchSpace(center3D);
 
-  // Innere Durchgangsbohrung (40mm ID)
+  // Innere Durchgangsbohrung (40mm ID) & äußere Zylinderwand
   sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPt, innerRadiusCm);
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPt, outerRadiusCm);
 
-  // Punkte für die weich gerundete N-Rippen-Außenkontur berechnen
-  const ribHeightCm = ribTipRadiusCm - baseRadiusCm; // e.g. 0.0825 cm (0.825mm)
-  const totalPoints = numRibs * 12; // 96 Punkte für maximale Oberflächenglätte
-  const pointColl = adsk.core.ObjectCollection.create();
-
-  for (let i = 0; i < totalPoints; i++) {
-    const angle = (i * 2.0 * Math.PI) / totalPoints;
-
-    // Relativer Winkel im Sektor der jeweiligen Rippe
-    const sectorAngle = (2.0 * Math.PI) / numRibs;
-    let relAngle = (angle % sectorAngle);
-    if (relAngle > sectorAngle / 2.0) {
-      relAngle -= sectorAngle;
-    }
-
-    // Weiche cos^4-Form für gerundete Rippenflanken und glatten Übergang zum Grundkörper
-    const phi = (relAngle / (sectorAngle / 2.0)) * (Math.PI / 2.0);
-    const r = baseRadiusCm + ribHeightCm * Math.pow(Math.cos(phi), 4);
-
-    const x = r * Math.cos(angle);
-    const y = r * Math.sin(angle);
-    const p3D = adsk.core.Point3D.create(x, y, startZCm);
-    pointColl.add(sketch.modelToSketchSpace(p3D));
-  }
-
-  // Schließe die Spline-Schleife mit dem ersten Punkt
-  pointColl.add(pointColl.item(0));
-
-  // Erzeuge die geschlossene gerundete Rippen-Spline-Kurve
-  const spline = sketch.sketchCurves.sketchFittedSplines.add(pointColl);
-  if (!spline) {
-    throw new Error('Konnte die gerundete Klemmrippen-Kontur nicht erzeugen.');
-  }
-
-  // Ringprofil zwischen innerer Bohrung und der gerundeten Rippenaußenwand finden
+  // Ringprofil zwischen innerer Bohrung und der Außenwand finden
   let shaftProfile: adsk.fusion.Profile | null = null;
   for (let i = 0; i < sketch.profiles.count; i++) {
     const prof = sketch.profiles.item(i);
@@ -268,7 +228,7 @@ function createRibbedShaft(
   }
 
   if (!shaftProfile) {
-    throw new Error('Profil für den gerippten Schaft konnte nicht ermittelt werden.');
+    throw new Error('Profil für den Schaft konnte nicht ermittelt werden.');
   }
 
   // Schaft extrudieren und mit dem Stopperflansch verbinden (Join)
@@ -281,14 +241,14 @@ function createRibbedShaft(
 }
 
 /**
- * Erzeugt eine konische Einführzone (Lead-In Chamfer) am oberen Ende des Inlets (Z = 40mm down to 57mm),
- * damit die Rippen beim Hineinschieben in das 42.0mm Rohr sanft zentriert und zerschneidungsfrei geführt werden.
+ * Erzeugt eine konische Einführzone (Lead-In Chamfer) am oberen Ende des Inlets (Z = 40mm),
+ * damit das Inlet sanft und zentriert in das Rohr eingeführt werden kann.
  */
 function createLeadInChamfer(
   rootComp: adsk.fusion.Component,
   totalLengthCm: number,
   leadInLenCm: number,
-  ribTipRadiusCm: number
+  outerRadiusCm: number
 ): void {
   if (leadInLenCm <= 0) return;
 
@@ -298,12 +258,12 @@ function createLeadInChamfer(
   // Skizze auf der XZ-Ebene für den 360°-Revolve Cut der Einführfase
   const sketch = sketches.add(rootComp.xZConstructionPlane);
 
-  const topZ = totalLengthCm; // 6.0 cm
-  const bottomZ = totalLengthCm - leadInLenCm; // 5.7 cm
+  const topZ = totalLengthCm;
+  const bottomZ = totalLengthCm - leadInLenCm;
 
   // Dreieckselement für den konischen Anschnitt am Z=40mm Ende:
-  const rOuterCut = ribTipRadiusCm + 0.3; // 2.3925 cm (großzügige äußere Schnittgrenze)
-  const rInnerCut = ribTipRadiusCm - 0.15; // 1.9425 cm (reduziert den Rohranfang auf ~38.8mm OD)
+  const rOuterCut = outerRadiusCm + 0.3; // großzügige äußere Schnittgrenze
+  const rInnerCut = outerRadiusCm - 0.15; // verjüngter Anschnitt am Rohreingang (~38.8mm OD)
 
   const p1_3D = adsk.core.Point3D.create(rOuterCut, 0, bottomZ);
   const p2_3D = adsk.core.Point3D.create(rOuterCut, 0, topZ + 0.1);
@@ -332,7 +292,7 @@ function createLeadInChamfer(
 
 /**
  * Erstellt ein Innengewinde M40x2.5 (volle Länge) an der Innenwand der Röhre
- * und wendet ein Gewindespiel von -0.25mm via Drücken/Ziehen (Offset Faces) an.
+ * und wendet ein Gewindespiel von -0.2mm via Drücken/Ziehen (Offset Faces) an.
  */
 function addInternalThreadAndClearance(
   rootComp: adsk.fusion.Component,
@@ -342,31 +302,24 @@ function addInternalThreadAndClearance(
 ): void {
   const threadFeatures = rootComp.features.threadFeatures;
 
-  // Innere Zylinderfläche selektieren
+  // Innere Zylinderfläche selektieren (Fläche mit minimaler Abweichung zum Innendurchmesser)
   let targetFace: adsk.fusion.BRepFace | null = null;
+  let minDiff = Number.MAX_VALUE;
+
   for (let i = 0; i < targetBody.faces.count; i++) {
     const face = targetBody.faces.item(i);
     if (face && face.geometry.surfaceType === adsk.core.SurfaceTypes.CylinderSurfaceType) {
       const cyl = face.geometry as adsk.core.Cylinder;
-      if (Math.abs(cyl.radius - innerRadiusCm) < 0.15) {
+      const diff = Math.abs(cyl.radius - innerRadiusCm);
+      if (diff < minDiff) {
+        minDiff = diff;
         targetFace = face;
-        break;
       }
     }
   }
 
-  if (!targetFace) {
-    for (let i = 0; i < targetBody.faces.count; i++) {
-      const face = targetBody.faces.item(i);
-      if (face && face.geometry.surfaceType === adsk.core.SurfaceTypes.CylinderSurfaceType) {
-        targetFace = face;
-        break;
-      }
-    }
-  }
-
-  if (!targetFace) {
-    throw new Error('Innenfläche für das Gewinde wurde nicht gefunden.');
+  if (!targetFace || minDiff > 0.05) {
+    throw new Error(`Innenfläche für das Gewinde (Radius ca. ${(innerRadiusCm * 10).toFixed(1)}mm) wurde nicht gefunden.`);
   }
 
   // Gewinde-Parameter: M40x2.5, 6H, Rechts, Metrisch, volle Länge
