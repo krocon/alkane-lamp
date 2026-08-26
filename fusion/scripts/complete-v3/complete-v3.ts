@@ -75,25 +75,51 @@ export function run(_context: string): void {
     // 7b. Drehung des Fußes gemäß TODO a-g (Ebene -50mm, Split Body, 180° Rotation um Beinachse, Re-Join)
     targetBody = rotateFootBySplittingLeg(rootComp, targetBody);
 
-    // 10a. Alle 3 Körper (Node 1, Node 2, Node 3 und Röhren) zum Gesamtkörper verschmelzen
+    // 8. Alle 3 Körper (Node 1, Node 2, Node 3 und Röhren) zum Gesamtkörper verschmelzen
     targetBody = combineAllBodies(rootComp, targetBody);
 
-    // 10b. Abrundung (40mm, Tangential G1, Radiustyp: Konstante, Ecktyp: Versatz) der 18 Knoten-Schnittkanten durchführen
+    // 9. Abrundungen (40mm Node-Fillets, Kabelkanal-Fasen, Fuß-Fillets, 10mm Röhren-Fillets) auf den Gesamtkörper anwenden
     applyNodeFilletsAtEnd(rootComp, targetBody, params, center2, center3);
-
-    // 8. Abfasung (0.7mm) der 2 Kabelkanal-Lochkanten am fertigen Gesamtkörper durchführen
     chamferCableHoleOpenings(rootComp, params, targetBody);
-
-    // 9. Verrundung (2mm) der oberen Kante der Kreisfläche des Standfusses am fertigen Gesamtkörper durchführen
     filletBasePlateTopEdgeAtEnd(rootComp, targetBody, params);
-
-    // 11. Definiere die XY-Ebene als untere Fußplattenebene (so dass das Gebilde auf dem Fuß steht)
-    alignFootToXYPlane(rootComp, targetBody);
-
-    // 12. Suche die in den Röhren befindlichen Kanten mit der Länge 33.584mm, selektiere sie und mache eine Abrundung von 10mm
     filletTubeEdges(rootComp, targetBody);
 
-    console.log('Erfolgreich generiert!');
+    // =====================================================================
+    // 10. TRENNUNG IN EINZELTEILE (cut_model = true) ODER GESAMTKÖRPER
+    // =====================================================================
+    if (params.cutModel) {
+      // 10a. Den fertig verschmolzenen und verrundeten Gesamtkörper im unrotierten Zustand exakt an den Röhrenmitten trennen
+      const { nodeBottom, nodeMiddle, nodeTop } = splitCombinedModelIntoThreeNodes(rootComp, targetBody, center2, center3);
+
+      // 10b. Steckbuchsen (38.2mm Ø mit 0.2mm Spiel, 22.5mm Tiefe) an den Trennflächen anbringen
+      applyConnectorSocketsToCutNodes(rootComp, params, nodeBottom, nodeMiddle, nodeTop);
+
+      // 10c. Zwei eigenständige Verbindungs-Röhren (35mm Innenbohrung für Kabel) erzeugen
+      const pipe1 = createStandaloneConnectorPipe(rootComp, params, 'connector-pipe-1');
+      const pipe2 = createStandaloneConnectorPipe(rootComp, params, 'connector-pipe-2');
+
+      // 10d. Körper gemäß Anforderung umbenennen
+      nodeTop.name = 'node-top';
+      nodeMiddle.name = 'node-middle';
+      nodeBottom.name = 'node-bottom';
+
+      // 10e. Fuß von node-bottom auf Z = 0 ausrichten
+      alignFootToXYPlane(rootComp, nodeBottom);
+
+      // 10f. Alle 5 Körper auf der XY-Ebene entlang der Y-Achse für das Druckbett anordnen
+      placeBodyOnXYPlane(rootComp, nodeTop, 0.0);       // Y = 0 cm (node-top)
+      placeBodyOnXYPlane(rootComp, nodeMiddle, 22.0);   // Y = 22 cm (node-middle)
+      placeBodyOnXYPlane(rootComp, nodeBottom, 44.0);   // Y = 44 cm (node-bottom)
+      placeBodyOnXYPlane(rootComp, pipe1, 62.0);        // Y = 62 cm (connector-pipe-1)
+      placeBodyOnXYPlane(rootComp, pipe2, 72.0);        // Y = 72 cm (connector-pipe-2)
+
+      console.log('Erfolgreich: Modell fertig verrundet, am unrotierten Modell exakt getrennt und auf der XY-Ebene angeordnet!');
+
+    } else {
+      alignFootToXYPlane(rootComp, targetBody);
+      targetBody.name = 'complete-model';
+      console.log('Erfolgreich als einstückiger Gesamtkörper generiert!');
+    }
 
   } catch (e) {
     console.error(`Failed: ${e}`);
@@ -405,6 +431,18 @@ function setupParameters(design: adsk.fusion.Design) {
     innerBallDiameter: getOrCreateParam('inner_ball_diameter', '42mm', 'mm', 'Durchmesser des ineren Kugelloches'),
     armEndBoreDepth: getOrCreateParam('arm_end_bore_depth', '41mm', 'mm', 'Länge / Tiefe der Bohrung am Ende der 8cm Arme'),
     armEndBoreDiameter: getOrCreateParam('arm_end_bore_diameter', '43mm', 'mm', 'Durchmesser der Bohrung am Ende der 8cm Arme'),
+    // Parameter für 3D-Druck Trennung & Verbindungsröhren
+    cutModel: (function() {
+      let p = params.itemByName('cut_model') || params.itemByName('cut-model');
+      if (!p) {
+        p = params.add('cut_model', adsk.core.ValueInput.createByString('1'), '', 'Modell in 3 Tetrapoden-Teile fuer 3D-Druck schneiden (1 = true, 0 = false)');
+      }
+      return p.value > 0.5 || p.expression === '1' || p.expression.toLowerCase() === 'true';
+    })(),
+    connectorOuterDiameter: getOrCreateParam('connector_outer_diameter', '38mm', 'mm', 'Aussendurchmesser der Verbindungsröhren'),
+    connectorInnerDiameter: getOrCreateParam('connector_inner_diameter', '35mm', 'mm', 'Innendurchmesser der Verbindungsröhren (Kabelkanal)'),
+    connectorLength: getOrCreateParam('connector_length', '45mm', 'mm', 'Gesamtlänge der Verbindungsröhren'),
+    connectorClearance: getOrCreateParam('connector_clearance', '0.2mm', 'mm', 'Spiel/Toleranz der Steckbuchsen-Aufnahmen an den Arm-Schnittkanten'),
     // Parameter für den Fuß / Basis-Platte
     basePlateDiameter: getOrCreateParam('base_plate_diameter', '160mm', 'mm', 'Durchmesser der runden Basis-Platte'),
     basePlateHeight: getOrCreateParam('base_plate_height', '10mm', 'mm', 'Höhe der runden Basis-Platte'),
@@ -1622,4 +1660,264 @@ function filletTubeEdges(
     undefined,
     'Step 12 (Röhren-Kanten)'
   );
+}
+
+/**
+ * Trennt den fertig verschmolzenen und verrundeten Gesamtkörper am Ende in 3 Einzelknoten (nodeBottom, nodeMiddle, nodeTop).
+ * Nutzt 100 cm lange Skizzenlinien auf der XZ-Konstruktionsebene als Schnittwerkzeuge (vollständig parametrisch).
+ */
+function splitCombinedModelIntoThreeNodes(
+  rootComp: adsk.fusion.Component,
+  targetBody: adsk.fusion.BRepBody,
+  center2: adsk.core.Point3D,
+  _center3: adsk.core.Point3D
+): { nodeBottom: adsk.fusion.BRepBody; nodeMiddle: adsk.fusion.BRepBody; nodeTop: adsk.fusion.BRepBody } {
+  const splitBodyFeatures = rootComp.features.splitBodyFeatures;
+  const sketches = rootComp.sketches;
+
+  // 1. Schnitt 1 (mittig in Verbindungsröhre 1-2) via 100 cm langer Skizzenlinie auf XZ-Ebene
+  const dir1to2 = adsk.core.Vector3D.create(-Math.sin(TETRA_ANGLE_RAD), 0, -Math.cos(TETRA_ANGLE_RAD));
+  const mid1to2 = adsk.core.Point3D.create(4.0 * dir1to2.x, 0, 4.0 * dir1to2.z);
+
+  // Vektor senkrecht zur 1-2-Achse in der XZ-Ebene
+  const perpX = -dir1to2.z;
+  const perpZ = dir1to2.x;
+
+  // Großzügige Länge (50 cm in jede Richtung = 100 cm Gesamtlinie), um das gesamte Modell sicher zu kreuzen
+  const p1_3D_1 = adsk.core.Point3D.create(mid1to2.x - 50.0 * perpX, 0, mid1to2.z - 50.0 * perpZ);
+  const p2_3D_1 = adsk.core.Point3D.create(mid1to2.x + 50.0 * perpX, 0, mid1to2.z + 50.0 * perpZ);
+
+  const sketch1 = sketches.add(rootComp.xZConstructionPlane);
+  const p1_1 = sketch1.modelToSketchSpace(p1_3D_1);
+  const p2_1 = sketch1.modelToSketchSpace(p2_3D_1);
+  const line1 = sketch1.sketchCurves.sketchLines.addByTwoPoints(p1_1, p2_1);
+
+  const splitInput1 = splitBodyFeatures.createInput(targetBody, line1, true);
+  if (!splitInput1) throw new Error('SplitInput 1 konnte nicht erzeugt werden.');
+  const splitFeat1 = splitBodyFeatures.add(splitInput1);
+  if (!splitFeat1 || splitFeat1.bodies.count < 2) {
+    throw new Error('Fehler bei Schnitt 1: Gesamtkörper konnte nicht in 2 Teile getrennt werden.');
+  }
+
+  const b1_a = splitFeat1.bodies.item(0);
+  const b1_b = splitFeat1.bodies.item(1);
+
+  let nodeBottom: adsk.fusion.BRepBody;
+  let restBody: adsk.fusion.BRepBody;
+
+  if (b1_a.boundingBox.minPoint.z < b1_b.boundingBox.minPoint.z) {
+    nodeBottom = b1_a;
+    restBody = b1_b;
+  } else {
+    nodeBottom = b1_b;
+    restBody = b1_a;
+  }
+
+  // 2. Schnitt 2 (mittig in Verbindungsröhre 2-3) via 100 cm langer Skizzenlinie auf XZ-Ebene bei Z = center2.z + 4.0
+  const mid2to3Z = center2.z + 4.0;
+  const p1_3D_2 = adsk.core.Point3D.create(center2.x - 50.0, 0, mid2to3Z);
+  const p2_3D_2 = adsk.core.Point3D.create(center2.x + 50.0, 0, mid2to3Z);
+
+  const sketch2 = sketches.add(rootComp.xZConstructionPlane);
+  const p1_2 = sketch2.modelToSketchSpace(p1_3D_2);
+  const p2_2 = sketch2.modelToSketchSpace(p2_3D_2);
+  const line2 = sketch2.sketchCurves.sketchLines.addByTwoPoints(p1_2, p2_2);
+
+  const splitInput2 = splitBodyFeatures.createInput(restBody, line2, true);
+  if (!splitInput2) throw new Error('SplitInput 2 konnte nicht erzeugt werden.');
+  const splitFeat2 = splitBodyFeatures.add(splitInput2);
+  if (!splitFeat2 || splitFeat2.bodies.count < 2) {
+    throw new Error('Fehler bei Schnitt 2: Verbleibender Körper konnte nicht in Node 2 und Node 3 getrennt werden.');
+  }
+
+  const b2_a = splitFeat2.bodies.item(0);
+  const b2_b = splitFeat2.bodies.item(1);
+
+  let nodeMiddle: adsk.fusion.BRepBody;
+  let nodeTop: adsk.fusion.BRepBody;
+
+  if (b2_a.boundingBox.minPoint.z < b2_b.boundingBox.minPoint.z) {
+    nodeMiddle = b2_a;
+    nodeTop = b2_b;
+  } else {
+    nodeMiddle = b2_b;
+    nodeTop = b2_a;
+  }
+
+  return { nodeBottom, nodeMiddle, nodeTop };
+}
+
+/**
+ * Findet die planar geschnittene Stirnfläche an einem Trennpunkt.
+ */
+function findCutFaceAtPoint(
+  body: adsk.fusion.BRepBody,
+  targetPt: adsk.core.Point3D
+): adsk.fusion.BRepFace | null {
+  let bestFace: adsk.fusion.BRepFace | null = null;
+  let minDist = Infinity;
+
+  for (let i = 0; i < body.faces.count; i++) {
+    const face = body.faces.item(i);
+    if (!face || face.geometry.surfaceType !== adsk.core.SurfaceTypes.PlaneSurfaceType) continue;
+
+    const bbox = face.boundingBox;
+    const faceCenter = adsk.core.Point3D.create(
+      (bbox.minPoint.x + bbox.maxPoint.x) / 2.0,
+      (bbox.minPoint.y + bbox.maxPoint.y) / 2.0,
+      (bbox.minPoint.z + bbox.maxPoint.z) / 2.0
+    );
+
+    const dist = faceCenter.distanceTo(targetPt);
+    if (dist < minDist && dist < 1.5) {
+      minDist = dist;
+      bestFace = face;
+    }
+  }
+
+  return bestFace;
+}
+
+/**
+ * Schneidet die Steckbuchsen (Durchmesser 38.2 mm, Tiefe 22.5 mm) für die Verbindungsröhren
+ * in die korrespondierenden Arm-Schnittflächen von nodeBottom, nodeMiddle und nodeTop.
+ */
+function applyConnectorSocketsToCutNodes(
+  rootComp: adsk.fusion.Component,
+  params: ReturnType<typeof setupParameters>,
+  nodeBottom: adsk.fusion.BRepBody,
+  nodeMiddle: adsk.fusion.BRepBody,
+  nodeTop: adsk.fusion.BRepBody
+): void {
+  const dir1to2 = adsk.core.Vector3D.create(-Math.sin(TETRA_ANGLE_RAD), 0, -Math.cos(TETRA_ANGLE_RAD));
+  const mid1to2 = adsk.core.Point3D.create(4.0 * dir1to2.x, 0, 4.0 * dir1to2.z);
+
+  const center2 = adsk.core.Point3D.create(8.0 * dir1to2.x, 0, 8.0 * dir1to2.z);
+  const mid2to3 = adsk.core.Point3D.create(center2.x, 0, center2.z + 4.0);
+
+  const boreDiamCm = params.connectorOuterDiameter.value + params.connectorClearance.value; // 38.2 mm = 3.82 cm
+  const boreDepthCm = params.connectorLength.value / 2.0; // 22.5 mm = 2.25 cm
+
+  // 1. Socket an nodeBottom (Trennfläche mid1to2)
+  const faceBottom = findCutFaceAtPoint(nodeBottom, mid1to2);
+  if (faceBottom) {
+    addConnectorSocketBore(rootComp, nodeBottom, faceBottom, boreDiamCm, boreDepthCm);
+  }
+
+  // 2. Socket an nodeMiddle (Trennfläche mid1to2)
+  const faceMiddle1 = findCutFaceAtPoint(nodeMiddle, mid1to2);
+  if (faceMiddle1) {
+    addConnectorSocketBore(rootComp, nodeMiddle, faceMiddle1, boreDiamCm, boreDepthCm);
+  }
+
+  // 3. Socket an nodeMiddle (Trennfläche mid2to3)
+  const faceMiddle3 = findCutFaceAtPoint(nodeMiddle, mid2to3);
+  if (faceMiddle3) {
+    addConnectorSocketBore(rootComp, nodeMiddle, faceMiddle3, boreDiamCm, boreDepthCm);
+  }
+
+  // 4. Socket an nodeTop (Trennfläche mid2to3)
+  const faceTop = findCutFaceAtPoint(nodeTop, mid2to3);
+  if (faceTop) {
+    addConnectorSocketBore(rootComp, nodeTop, faceTop, boreDiamCm, boreDepthCm);
+  }
+}
+
+/**
+ * Erzeugt eine geradlinige Verbindungsröhre mit ca. 35 mm Innenloch für Kabeldurchführung.
+ * Außendurchmesser: 38.0 mm, Innendurchmesser: 35.0 mm, Länge: 45.0 mm.
+ */
+function createStandaloneConnectorPipe(
+  rootComp: adsk.fusion.Component,
+  params: ReturnType<typeof setupParameters>,
+  name: string
+): adsk.fusion.BRepBody {
+  const outerDiameterCm = params.connectorOuterDiameter.value; // 3.8 cm
+  const innerDiameterCm = params.connectorInnerDiameter.value; // 3.5 cm
+  const lengthCm = params.connectorLength.value;               // 4.5 cm
+
+  const sketches = rootComp.sketches;
+  const extrudeFeatures = rootComp.features.extrudeFeatures;
+
+  const sketch = sketches.add(rootComp.xYConstructionPlane);
+  const center = adsk.core.Point3D.create(0, 0, 0);
+
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, outerDiameterCm / 2.0);
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, innerDiameterCm / 2.0);
+
+  const ringProfile = findRingProfile(sketch, innerDiameterCm);
+  if (!ringProfile) {
+    throw new Error('Ringprofil für Verbindungsröhre konnte nicht ermittelt werden.');
+  }
+
+  const extInput = extrudeFeatures.createInput(
+    ringProfile,
+    adsk.fusion.FeatureOperations.NewBodyFeatureOperation
+  );
+  extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(lengthCm));
+
+  const extrudeFeature = extrudeFeatures.add(extInput);
+  const tubeBody = extrudeFeature.bodies.item(0);
+  tubeBody.name = name;
+  return tubeBody;
+}
+
+/**
+ * Bohrt die Aufnahme-Steckbuchse (Socket) an einer Arm-Stirnfläche für die Verbindungsröhre.
+ * Durchmesser: 38.2 mm (38.0 mm Röhren-OD + 0.2 mm Spiel), Tiefe: 22.5 mm.
+ */
+function addConnectorSocketBore(
+  rootComp: adsk.fusion.Component,
+  nodeBody: adsk.fusion.BRepBody,
+  face: adsk.fusion.BRepFace,
+  boreDiameterCm: number,
+  boreDepthCm: number
+): void {
+  const sketch = rootComp.sketches.add(face);
+  const centerPoint = sketch.modelToSketchSpace(adsk.core.Point3D.create(0, 0, 0));
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, boreDiameterCm / 2.0);
+
+  if (sketch.profiles.count === 0) return;
+  const profile = sketch.profiles.item(0);
+
+  const extrudeFeatures = rootComp.features.extrudeFeatures;
+  const extInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+  extInput.participantBodies = [nodeBody];
+  extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(-boreDepthCm));
+  try {
+    extrudeFeatures.add(extInput);
+  } catch (_e) { }
+}
+
+/**
+ * Richtet einen Körper so aus, dass seine Unterseite exakt auf Z = 0 liegt (Druckbett)
+ * und verschiebt ihn auf die angegebene Y-Koordinate (X = 0).
+ */
+function placeBodyOnXYPlane(
+  rootComp: adsk.fusion.Component,
+  body: adsk.fusion.BRepBody,
+  targetYCm: number
+): void {
+  const bbox = body.boundingBox;
+  const minZ = bbox.minPoint.z;
+  const currentCenterX = (bbox.minPoint.x + bbox.maxPoint.x) / 2.0;
+  const currentCenterY = (bbox.minPoint.y + bbox.maxPoint.y) / 2.0;
+
+  const moveFeats = rootComp.features.moveFeatures;
+  const transVec = adsk.core.Vector3D.create(
+    -currentCenterX,
+    targetYCm - currentCenterY,
+    -minZ
+  );
+
+  const mat = adsk.core.Matrix3D.create();
+  mat.translation = transVec;
+
+  const moveInput = moveFeats.createInput2(createCollection([body]));
+  moveInput.defineAsFreeMove(mat);
+  try {
+    moveFeats.add(moveInput);
+  } catch (e) {
+    console.warn(`Fehler bei Anordnung von Body '${body.name}' auf XY-Ebene: ${e}`);
+  }
 }
