@@ -1,0 +1,12 @@
+{
+	"autodeskProduct":	"Fusion",
+	"type":	"script",
+	"author":	"Marc Kronberg",
+	"description":	{
+		"":	"Fusion 360 Skript zur Erzeugung einer dauerhaft festsitzenden, verdrehsicheren Steckverbindung für ein PLA-Rohr mit exakt 42.0 mm Innendurchmesser (optimiert für FDM-3D-Druck auf Bambu Lab P2S). for Alkane Lamp"
+	},
+	"version":	"1.0.0",
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true,
+	"iconFilename":	"ScriptIcon.svg"
+}
