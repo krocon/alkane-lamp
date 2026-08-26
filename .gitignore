@@ -143,3 +143,6 @@ vite.config.ts.timestamp-*
 .vite/
 /.idea/
 /package-lock.json
+
+# Compiled JavaScript files in fusion scripts
+fusion/scripts/**/*.js

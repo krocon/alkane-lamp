@@ -6,7 +6,8 @@
   "scripts": {
     "i": "npm i",
     "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "build": "tsc --noEmit",
+    "clean": "node -e \"const fs=require('fs'),path=require('path'); function clean(dir){if(!fs.existsSync(dir))return; fs.readdirSync(dir,{withFileTypes:true}).forEach(e=>{const p=path.join(dir,e.name); if(e.isDirectory())clean(p); else if(e.name.endsWith('.js'))fs.unlinkSync(p);});} clean('fusion/scripts');\""
   },
   "devDependencies": {
     "typescript": "^5.5.4"
