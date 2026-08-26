@@ -78,44 +78,46 @@ export function run(_context: string): void {
     // 8. Alle 3 Körper (Node 1, Node 2, Node 3 und Röhren) zum Gesamtkörper verschmelzen
     targetBody = combineAllBodies(rootComp, targetBody);
 
-    // 9. Abrundungen (40mm Node-Fillets, Kabelkanal-Fasen, Fuß-Fillets, 10mm Röhren-Fillets) auf den Gesamtkörper anwenden
-    applyNodeFilletsAtEnd(rootComp, targetBody, params, center2, center3);
-    chamferCableHoleOpenings(rootComp, params, targetBody);
-    filletBasePlateTopEdgeAtEnd(rootComp, targetBody, params);
-    filletTubeEdges(rootComp, targetBody);
-
     // =====================================================================
-    // 10. TRENNUNG IN EINZELTEILE (cut_model = true) ODER GESAMTKÖRPER
+    // 9. TRENNUNG IN EINZELTEILE (cut_model = true) ODER GESAMTKÖRPER
     // =====================================================================
     if (params.cutModel) {
-      // 10a. Den fertig verschmolzenen und verrundeten Gesamtkörper im unrotierten Zustand exakt an den Röhrenmitten trennen
+      // 9a. Zuerst den ungefilleten Gesamtkörper im unrotierten Zustand exakt an den Röhrenmitten zerschneiden (Split Body)
       const { nodeBottom, nodeMiddle, nodeTop } = splitCombinedModelIntoThreeNodes(rootComp, targetBody, center2, center3);
 
-      // 10b. Steckbuchsen (38.2mm Ø mit 0.2mm Spiel, 22.5mm Tiefe) an den Trennflächen anbringen
-      applyConnectorSocketsToCutNodes(rootComp, params, nodeBottom, nodeMiddle, nodeTop);
+      // 9b. Danach Verrundungen (Knoten-Fillets) auf alle 3 Einzelknoten anwenden
+      applyNodeFilletsToIndividualNodes(rootComp, params, nodeBottom, nodeMiddle, nodeTop, center2, center3);
 
-      // 10c. Zwei eigenständige Verbindungs-Röhren (35mm Innenbohrung für Kabel) erzeugen
-      const pipe1 = createStandaloneConnectorPipe(rootComp, params, 'connector-pipe-1');
-      const pipe2 = createStandaloneConnectorPipe(rootComp, params, 'connector-pipe-2');
+      // 9c. Kabelkanal-Fasen und Fuß-Oberkanten-Fillet an nodeBottom anwenden
+      chamferCableHoleOpenings(rootComp, params, nodeBottom);
+      filletBasePlateTopEdgeAtEnd(rootComp, nodeBottom, params);
 
-      // 10d. Körper gemäß Anforderung umbenennen
+      // 9d. Körper gemäß Anforderung umbenennen
       nodeTop.name = 'node-top';
       nodeMiddle.name = 'node-middle';
       nodeBottom.name = 'node-bottom';
 
-      // 10e. Fuß von node-bottom auf Z = 0 ausrichten
+      // 9e. Fuß von node-bottom auf Z = 0 ausrichten
       alignFootToXYPlane(rootComp, nodeBottom);
 
-      // 10f. Alle 5 Körper auf der XY-Ebene entlang der Y-Achse für das Druckbett anordnen
+      // 9f. Zwei eigenständige Verbindungs-Röhren (35mm Innenbohrung für Kabel) erzeugen
+      const pipe1 = createStandaloneConnectorPipe(rootComp, params, 'connector-pipe-1');
+      const pipe2 = createStandaloneConnectorPipe(rootComp, params, 'connector-pipe-2');
+
+      // 9g. Alle 5 Körper auf der XY-Ebene entlang der Y-Achse für das Druckbett anordnen
       placeBodyOnXYPlane(rootComp, nodeTop, 0.0);       // Y = 0 cm (node-top)
       placeBodyOnXYPlane(rootComp, nodeMiddle, 22.0);   // Y = 22 cm (node-middle)
       placeBodyOnXYPlane(rootComp, nodeBottom, 44.0);   // Y = 44 cm (node-bottom)
       placeBodyOnXYPlane(rootComp, pipe1, 62.0);        // Y = 62 cm (connector-pipe-1)
       placeBodyOnXYPlane(rootComp, pipe2, 72.0);        // Y = 72 cm (connector-pipe-2)
 
-      console.log('Erfolgreich: Modell fertig verrundet, am unrotierten Modell exakt getrennt und auf der XY-Ebene angeordnet!');
+      console.log('Erfolgreich: Modell zerschnitten, verrundet, auf XY-Ebene gelegt (Verbindungsstecker mit 37.8mm OD für 38mm Armbohrungen)!');
 
     } else {
+      applyNodeFilletsAtEnd(rootComp, targetBody, params, center2, center3);
+      chamferCableHoleOpenings(rootComp, params, targetBody);
+      filletBasePlateTopEdgeAtEnd(rootComp, targetBody, params);
+      filletTubeEdges(rootComp, targetBody);
       alignFootToXYPlane(rootComp, targetBody);
       targetBody.name = 'complete-model';
       console.log('Erfolgreich als einstückiger Gesamtkörper generiert!');
@@ -416,6 +418,24 @@ function setupParameters(design: adsk.fusion.Design) {
       } catch (_e) {
         // Parameter konnte nicht aktualisiert werden
       }
+    } else if (name === 'node_fillet_radius') {
+      try {
+        p.expression = valueStr;
+      } catch (_e) {
+        // Parameter konnte nicht aktualisiert werden
+      }
+    } else if (name === 'connector_inner_diameter') {
+      try {
+        p.expression = valueStr;
+      } catch (_e) {
+        // Parameter konnte nicht aktualisiert werden
+      }
+    } else if (name === 'connector_outer_diameter') {
+      try {
+        p.expression = valueStr;
+      } catch (_e) {
+        // Parameter konnte nicht aktualisiert werden
+      }
     }
     return p;
   }
@@ -439,9 +459,9 @@ function setupParameters(design: adsk.fusion.Design) {
       }
       return p.value > 0.5 || p.expression === '1' || p.expression.toLowerCase() === 'true';
     })(),
-    connectorOuterDiameter: getOrCreateParam('connector_outer_diameter', '38mm', 'mm', 'Aussendurchmesser der Verbindungsröhren'),
-    connectorInnerDiameter: getOrCreateParam('connector_inner_diameter', '35mm', 'mm', 'Innendurchmesser der Verbindungsröhren (Kabelkanal)'),
-    connectorLength: getOrCreateParam('connector_length', '45mm', 'mm', 'Gesamtlänge der Verbindungsröhren'),
+    connectorOuterDiameter: getOrCreateParam('connector_outer_diameter', '37.8mm', 'mm', 'Aussendurchmesser der Verbindungsröhren (38mm - 0.2mm Spiel)'),
+    connectorInnerDiameter: getOrCreateParam('connector_inner_diameter', '30mm', 'mm', 'Innendurchmesser der Verbindungsröhren (Kabelkanal)'),
+    connectorLength: getOrCreateParam('connector_length', '30mm', 'mm', 'Gesamtlänge der Verbindungsröhren'),
     connectorClearance: getOrCreateParam('connector_clearance', '0.2mm', 'mm', 'Spiel/Toleranz der Steckbuchsen-Aufnahmen an den Arm-Schnittkanten'),
     // Parameter für den Fuß / Basis-Platte
     basePlateDiameter: getOrCreateParam('base_plate_diameter', '160mm', 'mm', 'Durchmesser der runden Basis-Platte'),
@@ -455,7 +475,7 @@ function setupParameters(design: adsk.fusion.Design) {
     cableHoleDiameter: getOrCreateParam('cable_hole_diameter', '7mm', 'mm', 'Durchmesser des Kabelkanallochs'),
     cableHoleHeight: getOrCreateParam('cable_hole_height', '5.0mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite'),
     cableHoleChamfer: getOrCreateParam('cable_hole_chamfer', '0.7mm', 'mm', 'Abfasung der Lochkanten des Kabelkanals'),
-    nodeFilletRadius: getOrCreateParam('node_fillet_radius', '40mm', 'mm', 'Radius fuer die Tetrapod-Knotenabrundung (40mm, Tangential G1, Konstante, Versatz)'),
+    nodeFilletRadius: getOrCreateParam('node_fillet_radius', '25mm', 'mm', 'Radius fuer die Tetrapod-Knotenabrundung (25mm, Tangential G1, Konstante, Versatz)'),
     footLegBoreDiameter: getOrCreateParam('foot_leg_bore_diameter', '38mm', 'mm', 'Durchmesser der Aufbohrung des Fussbeins (ca. 38mm)')
   };
 }
@@ -1779,47 +1799,126 @@ function findCutFaceAtPoint(
 }
 
 /**
- * Schneidet die Steckbuchsen (Durchmesser 38.2 mm, Tiefe 22.5 mm) für die Verbindungsröhren
- * in die korrespondierenden Arm-Schnittflächen von nodeBottom, nodeMiddle und nodeTop.
+ * Wendet die 40mm Knoten-Verrundungen auf die 3 einzelnen Tetrapoden-Körper an.
  */
-function applyConnectorSocketsToCutNodes(
+function applyNodeFilletsToIndividualNodes(
+  rootComp: adsk.fusion.Component,
+  params: ReturnType<typeof setupParameters>,
+  nodeBottom: adsk.fusion.BRepBody,
+  nodeMiddle: adsk.fusion.BRepBody,
+  nodeTop: adsk.fusion.BRepBody,
+  center2: adsk.core.Point3D,
+  center3: adsk.core.Point3D
+): void {
+  const nodeItems = [
+    { name: 'node-bottom', body: nodeBottom, center: adsk.core.Point3D.create(0, 0, 0) },
+    { name: 'node-middle', body: nodeMiddle, center: center2 },
+    { name: 'node-top', body: nodeTop, center: center3 }
+  ];
+
+  for (const item of nodeItems) {
+    const edges = findNodeIntersectionEdges(item.body, item.center);
+    if (edges.length > 0) {
+      applyFilletWithFallbacks(
+        rootComp,
+        edges,
+        params.nodeFilletRadius.value,
+        'node_fillet_radius',
+        `Knotenabrundung (${item.name})`
+      );
+    }
+  }
+}
+
+/**
+ * Findet alle ebenen Röhren-Schnittflächen an einem getrennten Knoten-Körper.
+ */
+function findCutFacesOnBody(body: adsk.fusion.BRepBody): adsk.fusion.BRepFace[] {
+  const cutFaces: adsk.fusion.BRepFace[] = [];
+
+  for (let i = 0; i < body.faces.count; i++) {
+    const face = body.faces.item(i);
+    if (!face || face.geometry.surfaceType !== adsk.core.SurfaceTypes.PlaneSurfaceType) continue;
+
+    const area = face.area;
+    if (area > 5.0 && area < 25.0) {
+      let hasCircularEdge = false;
+      for (let j = 0; j < face.edges.count; j++) {
+        const edge = face.edges.item(j);
+        if (edge && edge.geometry.curveType === adsk.core.Curve3DTypes.Circle3DCurveType) {
+          hasCircularEdge = true;
+          break;
+        }
+      }
+      if (hasCircularEdge) {
+        cutFaces.push(face);
+      }
+    }
+  }
+
+  return cutFaces;
+}
+
+/**
+ * Schneidet GANZ AM ENDE die Steckbuchsen (38.2 mm Ø, 15 mm Tiefe, 35 mm Kabelkanal)
+ * in die Schnittflächen von nodeBottom, nodeMiddle und nodeTop.
+ */
+function applyConnectorSocketsAtTheVeryEnd(
   rootComp: adsk.fusion.Component,
   params: ReturnType<typeof setupParameters>,
   nodeBottom: adsk.fusion.BRepBody,
   nodeMiddle: adsk.fusion.BRepBody,
   nodeTop: adsk.fusion.BRepBody
 ): void {
-  const dir1to2 = adsk.core.Vector3D.create(-Math.sin(TETRA_ANGLE_RAD), 0, -Math.cos(TETRA_ANGLE_RAD));
-  const mid1to2 = adsk.core.Point3D.create(4.0 * dir1to2.x, 0, 4.0 * dir1to2.z);
-
-  const center2 = adsk.core.Point3D.create(8.0 * dir1to2.x, 0, 8.0 * dir1to2.z);
-  const mid2to3 = adsk.core.Point3D.create(center2.x, 0, center2.z + 4.0);
-
   const boreDiamCm = params.connectorOuterDiameter.value + params.connectorClearance.value; // 38.2 mm = 3.82 cm
-  const boreDepthCm = params.connectorLength.value / 2.0; // 22.5 mm = 2.25 cm
+  const boreDepthCm = params.connectorLength.value / 2.0; // 15.0 mm = 1.5 cm
 
-  // 1. Socket an nodeBottom (Trennfläche mid1to2)
-  const faceBottom = findCutFaceAtPoint(nodeBottom, mid1to2);
-  if (faceBottom) {
-    addConnectorSocketBore(rootComp, nodeBottom, faceBottom, boreDiamCm, boreDepthCm);
-  }
+  const nodeBodies = [nodeBottom, nodeMiddle, nodeTop];
 
-  // 2. Socket an nodeMiddle (Trennfläche mid1to2)
-  const faceMiddle1 = findCutFaceAtPoint(nodeMiddle, mid1to2);
-  if (faceMiddle1) {
-    addConnectorSocketBore(rootComp, nodeMiddle, faceMiddle1, boreDiamCm, boreDepthCm);
-  }
+  for (const body of nodeBodies) {
+    const faces = findCutFacesOnBody(body);
+    for (const face of faces) {
+      const bbox = face.boundingBox;
+      const faceCenter3D = adsk.core.Point3D.create(
+        (bbox.minPoint.x + bbox.maxPoint.x) / 2.0,
+        (bbox.minPoint.y + bbox.maxPoint.y) / 2.0,
+        (bbox.minPoint.z + bbox.maxPoint.z) / 2.0
+      );
 
-  // 3. Socket an nodeMiddle (Trennfläche mid2to3)
-  const faceMiddle3 = findCutFaceAtPoint(nodeMiddle, mid2to3);
-  if (faceMiddle3) {
-    addConnectorSocketBore(rootComp, nodeMiddle, faceMiddle3, boreDiamCm, boreDepthCm);
-  }
+      const sketch = rootComp.sketches.add(face);
 
-  // 4. Socket an nodeTop (Trennfläche mid2to3)
-  const faceTop = findCutFaceAtPoint(nodeTop, mid2to3);
-  if (faceTop) {
-    addConnectorSocketBore(rootComp, nodeTop, faceTop, boreDiamCm, boreDepthCm);
+      let circleCenterPt: adsk.core.Point3D | null = null;
+      for (let j = 0; j < face.edges.count; j++) {
+        const edge = face.edges.item(j);
+        if (edge && edge.geometry.curveType === adsk.core.Curve3DTypes.Circle3DCurveType) {
+          const circ = edge.geometry as adsk.core.Circle3D;
+          circleCenterPt = sketch.modelToSketchSpace(circ.center);
+          break;
+        }
+      }
+
+      if (!circleCenterPt) {
+        circleCenterPt = sketch.modelToSketchSpace(faceCenter3D);
+      }
+
+      const innerDiamCm = params.connectorInnerDiameter.value; // 3.0 cm = 30 mm
+
+      // Äußerer Kreis für den Steckröhren-Außendurchmesser (38.2 mm)
+      sketch.sketchCurves.sketchCircles.addByCenterRadius(circleCenterPt, boreDiamCm / 2.0);
+      // Innerer Kreis für den Kabelkanal (30.0 mm)
+      sketch.sketchCurves.sketchCircles.addByCenterRadius(circleCenterPt, innerDiamCm / 2.0);
+
+      const ringProfile = findRingProfile(sketch, innerDiamCm);
+      if (!ringProfile) continue;
+
+      const extrudeFeatures = rootComp.features.extrudeFeatures;
+      const extInput = extrudeFeatures.createInput(ringProfile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+      extInput.participantBodies = [body];
+      extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(-boreDepthCm));
+      try {
+        extrudeFeatures.add(extInput);
+      } catch (_e) { }
+    }
   }
 }
 
@@ -1864,24 +1963,31 @@ function createStandaloneConnectorPipe(
 
 /**
  * Bohrt die Aufnahme-Steckbuchse (Socket) an einer Arm-Stirnfläche für die Verbindungsröhre.
- * Durchmesser: 38.2 mm (38.0 mm Röhren-OD + 0.2 mm Spiel), Tiefe: 22.5 mm.
+ * Außendurchmesser Buchse: 38.2 mm, Innendurchmesser Kabelkanal: 35.0 mm, Tiefe: 15.0 mm.
  */
 function addConnectorSocketBore(
   rootComp: adsk.fusion.Component,
   nodeBody: adsk.fusion.BRepBody,
   face: adsk.fusion.BRepFace,
+  centerPt3D: adsk.core.Point3D,
   boreDiameterCm: number,
-  boreDepthCm: number
+  boreDepthCm: number,
+  cableHoleDiameterCm: number = 3.5
 ): void {
   const sketch = rootComp.sketches.add(face);
-  const centerPoint = sketch.modelToSketchSpace(adsk.core.Point3D.create(0, 0, 0));
-  sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, boreDiameterCm / 2.0);
+  // Exakten 3D-Mittelpunkt des Röhrenzylinders auf der Schnittfläche in den 2D-Skizzenraum umrechnen
+  const centerPoint = sketch.modelToSketchSpace(centerPt3D);
 
-  if (sketch.profiles.count === 0) return;
-  const profile = sketch.profiles.item(0);
+  // Äußerer Kreis für den Steckröhren-Außendurchmesser (38.2 mm)
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, boreDiameterCm / 2.0);
+  // Innerer Kreis für den Kabelkanal (35.0 mm)
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, cableHoleDiameterCm / 2.0);
+
+  const ringProfile = findRingProfile(sketch, cableHoleDiameterCm);
+  if (!ringProfile) return;
 
   const extrudeFeatures = rootComp.features.extrudeFeatures;
-  const extInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+  const extInput = extrudeFeatures.createInput(ringProfile, adsk.fusion.FeatureOperations.CutFeatureOperation);
   extInput.participantBodies = [nodeBody];
   extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(-boreDepthCm));
   try {
