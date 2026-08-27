@@ -15,10 +15,7 @@ const TETRA_ANGLE_DEG_STR = '109.47122063449069deg';
 const EDGE_LEN_NODE_INTERSECTION_CM = 5.1514; // 51.514 mm Knoten-Schnittkanten
 const EDGE_LEN_TUBE_INTERSECTION_CM = 3.3584; // 33.584 mm Röhren-Schnittkanten
 
-/* 
-TODO complete-v2.ts
-a) als step 11: definiere die xy-Ebene als untere Fussplattenebene (so dass das Gebilde auf dem Fuss steht).
-*/
+
 
 /** Hauptfunktion (Orchestrator) */
 export function run(_context: string): void {
