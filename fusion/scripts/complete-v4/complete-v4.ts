@@ -75,6 +75,8 @@ export function run(_context: string): void {
     // 8. Alle 3 Körper (Node 1, Node 2, Node 3 und Röhren) zum Gesamtkörper verschmelzen
     targetBody = combineAllBodies(rootComp, targetBody);
 
+    // 8b. Nach dem Merge bei jedem Knoten in die 4 Richtungen vom Zentrum 43.00mm für ca. 40mm lang bohren
+    targetBody = drillNodeBores(rootComp, targetBody, params, center2, center3);
 
     applyNodeFilletsAtEnd(rootComp, targetBody, params, center2, center3);
     chamferCableHoleOpenings(rootComp, params, targetBody);
@@ -461,8 +463,10 @@ function setupParameters(design: adsk.fusion.Design) {
     cableHoleDiameter: getOrCreateParam('cable_hole_diameter', '7mm', 'mm', 'Durchmesser des Kabelkanallochs'),
     cableHoleHeight: getOrCreateParam('cable_hole_height', '5.0mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite'),
     cableHoleChamfer: getOrCreateParam('cable_hole_chamfer', '0.7mm', 'mm', 'Abfasung der Lochkanten des Kabelkanals'),
-    nodeFilletRadius: getOrCreateParam('node_fillet_radius', '25mm', 'mm', 'Radius fuer die Tetrapod-Knotenabrundung (25mm, Tangential G1, Konstante, Versatz)'),
-    footLegBoreDiameter: getOrCreateParam('foot_leg_bore_diameter', '43mm', 'mm', 'Durchmesser der Aufbohrung des Fussbeins (43mm)')
+    nodeFilletRadius: getOrCreateParam('node_fillet_radius', '30mm', 'mm', 'Radius fuer die Tetrapod-Knotenabrundung (25mm, Tangential G1, Konstante, Versatz)'),
+    footLegBoreDiameter: getOrCreateParam('foot_leg_bore_diameter', '43mm', 'mm', 'Durchmesser der Aufbohrung des Fussbeins (43mm)'),
+    nodeBoreDiameter: getOrCreateParam('node_bore_diameter', '43mm', 'mm', 'Durchmesser der Knoten-Bohrungen (43mm)'),
+    nodeBoreDepth: getOrCreateParam('node_bore_depth', '40mm', 'mm', 'Tiefe der Knoten-Bohrungen vom Zentrum (40mm)')
   };
 }
 
@@ -871,6 +875,174 @@ function combineAllBodies(
   }
 
   return getLiveBody(rootComp, mainBody);
+}
+
+/**
+ * Bohrt nach dem Merge bei jedem Knoten in die 4 tetrahedralen Richtungen
+ * vom Zentrum aus mit Durchmesser (43mm) und Tiefe (ca 40mm).
+ */
+function drillNodeBores(
+  rootComp: adsk.fusion.Component,
+  targetBody: adsk.fusion.BRepBody,
+  params: ReturnType<typeof setupParameters>,
+  center2: adsk.core.Point3D,
+  center3: adsk.core.Point3D
+): adsk.fusion.BRepBody {
+  const center1 = adsk.core.Point3D.create(0, 0, 0);
+
+  const boreDiamCm = params.nodeBoreDiameter.value; // 4.3 cm (43mm)
+  const boreDepthCm = params.nodeBoreDepth.value;   // 4.0 cm (40mm)
+
+  // 1. Basis-Richtungsvektoren in lokalem Tetrapod-Koordinatensystem
+  const tetraAngle = TETRA_ANGLE_RAD;
+  const sinTetra = Math.sin(tetraAngle);
+  const cosTetra = Math.cos(tetraAngle);
+
+  // Arm 0: (0, 0, -1)
+  const v0 = adsk.core.Vector3D.create(0, 0, -1);
+
+  // Arm 1: (-sinTetra, 0, -cosTetra)
+  const v1 = adsk.core.Vector3D.create(-sinTetra, 0, -cosTetra);
+
+  // Arm 2: v1 rotieren um +120 deg um Z-Achse
+  const v2 = adsk.core.Vector3D.create(
+    0.5 * sinTetra,
+    -(Math.sqrt(3) / 2.0) * sinTetra,
+    -cosTetra
+  );
+
+  // Arm 3: v1 rotieren um +240 deg um Z-Achse
+  const v3 = adsk.core.Vector3D.create(
+    0.5 * sinTetra,
+    (Math.sqrt(3) / 2.0) * sinTetra,
+    -cosTetra
+  );
+
+  const localBaseVectors = [v0, v1, v2, v3];
+
+  // Matrix fuer Node 2 (Rotation 180° um Y-Achse)
+  const rotMatrixNode2 = adsk.core.Matrix3D.create();
+  rotMatrixNode2.setToRotation(Math.PI, adsk.core.Vector3D.create(0, 1, 0), adsk.core.Point3D.create(0, 0, 0));
+
+  // Definition der 3 Knoten (Zentrum und Rotationsmatrix zur Transformation der lokalen Vektoren)
+  const nodes = [
+    { name: 'Node 1', center: center1, rotMatrix: adsk.core.Matrix3D.create() },
+    { name: 'Node 2', center: center2, rotMatrix: rotMatrixNode2 },
+    { name: 'Node 3', center: center3, rotMatrix: adsk.core.Matrix3D.create() }
+  ];
+
+  let currentBody = targetBody;
+
+  for (const node of nodes) {
+    for (let armIdx = 0; armIdx < 4; armIdx++) {
+      const baseV = localBaseVectors[armIdx];
+      const locVec = adsk.core.Vector3D.create(baseV.x, baseV.y, baseV.z);
+      locVec.transformBy(node.rotMatrix);
+      locVec.normalize();
+
+      currentBody = cutBoreCylinder(
+        rootComp,
+        currentBody,
+        node.center,
+        locVec,
+        boreDiamCm,
+        boreDepthCm,
+        `${node.name}_Arm_${armIdx}`
+      );
+    }
+  }
+
+  return currentBody;
+}
+
+/**
+ * Erzeugt einen Schneid-Zylinder mit Radius (diamCm/2) und Höhe (depthCm),
+ * richtet dessen Achse entlang dirVec aus, positioniert den Fußpunkt auf nodeCenter
+ * und führt eine Cut-Operation auf targetBody durch.
+ */
+function cutBoreCylinder(
+  rootComp: adsk.fusion.Component,
+  targetBody: adsk.fusion.BRepBody,
+  nodeCenter: adsk.core.Point3D,
+  dirVec: adsk.core.Vector3D,
+  diamCm: number,
+  depthCm: number,
+  boreLabel: string
+): adsk.fusion.BRepBody {
+  try {
+    const sketches = rootComp.sketches;
+    const features = rootComp.features;
+    const extrudeFeatures = features.extrudeFeatures;
+    const combineFeatures = features.combineFeatures;
+    const moveFeatures = features.moveFeatures;
+
+    // 1. Zylinder im Ursprung auf XY-Ebene extrudieren (+Z Richtung: (0,0,1))
+    const sketch = sketches.add(rootComp.xYConstructionPlane);
+    sketch.sketchCurves.sketchCircles.addByCenterRadius(
+      adsk.core.Point3D.create(0, 0, 0),
+      diamCm / 2.0
+    );
+
+    if (sketch.profiles.count === 0) {
+      console.warn(`[drillBore] Kein Profil in Skizze fuer ${boreLabel} gefunden.`);
+      return targetBody;
+    }
+    const profile = sketch.profiles.item(0);
+
+    const extInput = extrudeFeatures.createInput(
+      profile,
+      adsk.fusion.FeatureOperations.NewBodyFeatureOperation
+    );
+    extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(depthCm));
+    const extFeat = extrudeFeatures.add(extInput);
+    if (!extFeat || extFeat.bodies.count === 0) {
+      console.warn(`[drillBore] Extrusion fuer Zylinder ${boreLabel} fehlgeschlagen.`);
+      return targetBody;
+    }
+
+    const toolBody = extFeat.bodies.item(0);
+
+    // 2. Transformation berechnen: Lokale Z-Achse (0,0,1) nach dirVec drehen, dann nach nodeCenter verschieben
+    const localZ = adsk.core.Vector3D.create(0, 0, 1);
+    const transMat = adsk.core.Matrix3D.create();
+
+    const dot = localZ.dotProduct(dirVec);
+    if (Math.abs(dot - 1.0) < 1e-5) {
+      // Keine Rotation notwendig
+    } else if (Math.abs(dot + 1.0) < 1e-5) {
+      // 180° Rotation um X-Achse
+      transMat.setToRotation(Math.PI, adsk.core.Vector3D.create(1, 0, 0), adsk.core.Point3D.create(0, 0, 0));
+    } else {
+      const rotAxis = localZ.crossProduct(dirVec);
+      rotAxis.normalize();
+      const rotAngle = Math.acos(Math.min(1.0, Math.max(-1.0, dot)));
+      transMat.setToRotation(rotAngle, rotAxis, adsk.core.Point3D.create(0, 0, 0));
+    }
+
+    const shiftMat = adsk.core.Matrix3D.create();
+    shiftMat.translation = adsk.core.Vector3D.create(nodeCenter.x, nodeCenter.y, nodeCenter.z);
+    transMat.transformBy(shiftMat);
+
+    // Tool-Body an Position bewegen
+    const moveInput = moveFeatures.createInput2(createCollection([toolBody]));
+    moveInput.defineAsFreeMove(transMat);
+    moveFeatures.add(moveInput);
+
+    // 3. Cut-Operation (targetBody MINUS toolBody)
+    const toolColl = createCollection([toolBody]);
+    const combineInput = combineFeatures.createInput(targetBody, toolColl);
+    combineInput.operation = adsk.fusion.FeatureOperations.CutFeatureOperation;
+    const combineFeat = combineFeatures.add(combineInput);
+
+    if (combineFeat && combineFeat.bodies.count > 0) {
+      const res = combineFeat.bodies.item(0);
+      if (res) return res;
+    }
+  } catch (e) {
+    console.warn(`[drillBore] Fehler beim Bohren (${boreLabel}): ${e}`);
+  }
+
+  return getLiveBody(rootComp, targetBody);
 }
 
 /**
