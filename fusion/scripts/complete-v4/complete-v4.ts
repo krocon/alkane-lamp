@@ -15,7 +15,25 @@ const TETRA_ANGLE_DEG_STR = '109.47122063449069deg';
 const EDGE_LEN_NODE_INTERSECTION_CM = 5.1514; // 51.514 mm Knoten-Schnittkanten
 const EDGE_LEN_TUBE_INTERSECTION_CM = 3.3584; // 33.584 mm Röhren-Schnittkanten
 
+/*
 
+ # TODO Die Konstruktion (Radien und Schnitte) so ändern, dass der 3d-Druck leichter ist
+
+ Problem: derzeit haben wir 3 große Teile mit fast waagerehten Röhren. Diese werden beim 3d-Druck oleicht oval und funktionieren dann nicht mehr.
+
+ ## Aufgaben
+
+  ### a) Arme
+  Schneide alle 7 Arme, die ein Inlet (thread-inlet-m40x2_5.ts) aufnehmen sollen , so ab ,
+  dass wir diese Arme separat (senkrecht) drucken können.
+  Innendurchmesser: 43.0 mm.
+  Erzeuge entspechende Verbindungsmöglichkeit am Knoten.
+  Wenn es hilft, vergrößere den Äusseren Durchmesser  'arm_outer_diameter' von  '46mm' auf  '48mm'
+
+  ### b) Fuss und ersten Knoten trennen
+  Mache einen Schnitt durch das Fussbein (node-bottom). Schneide es so, deass der abgetrennte Knoten aussieht wie node-middle.
+
+ */
 
 /** Hauptfunktion (Orchestrator) */
 export function run(_context: string): void {
