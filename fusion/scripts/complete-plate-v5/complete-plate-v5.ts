@@ -3,18 +3,14 @@ import { adsk } from "@adsk/fusion";
 const app = adsk.core.Application.get();
 const ui = app ? app.userInterface : null;
 
-// =====================================================================
-// GEOMETRISCHE KONSTANTEN & SCHNITTKANTEN-MEASURES
-// =====================================================================
+/** Geometrische Toleranz für Such- und Prüfaufgaben (in cm). */
+const TOL = 0.05; // 0.5 mm in cm
 
-/** Tetraeder-Bindungswinkel theta = arccos(-1/3) ≈ 109.47122° */
-const TETRA_ANGLE_RAD = Math.acos(-1.0 / 3.0);
-const TETRA_ANGLE_DEG_STR = '109.47122063449069deg';
-
-/** Präzise Schnittkanten-Bogenlänge (in cm) für Knoten-Abrundung */
-const EDGE_LEN_NODE_INTERSECTION_CM = 5.1514; // 51.514 mm Knoten-Schnittkanten
-
-/** Hauptfunktion (Orchestrator) */
+/**
+ * Hauptfunktion (Orchestrator):
+ * Erzeugt ausschließlich die untere Baugruppe (Basis-Platte mit Kabelkanal,
+ * geneigtem Fußbein und oberem Anschluss-Steckzapfen).
+ */
 export function run(_context: string): void {
   try {
     if (!app || !ui) {
@@ -32,27 +28,38 @@ export function run(_context: string): void {
     // 1. Parameter definieren
     const params = setupParameters(design);
 
-    // 2. Einzelnen Tetrapod (Node 1) im Ursprung (0,0,0) erzeugen
-    //
+    // 2. Basis-Platte: Runder Grundkörper (XY-Ebene) + Verrundung der oberen Kante
+    const baseBody = createBasePlate(rootComp, params);
 
+    // 3. Geneigte Bein-Achse: Referenzskizze auf der XZ-Ebene (Konstruktionslinie)
+    const legAxis = createLegAxis(rootComp, params);
 
-    /*
+    // 4. Rechtwinklige Konstruktionsebene am oberen Endpunkt der Bein-Achse (Plane Along Path)
+    const tiltedPlane = createTiltedConstructionPlane(rootComp, legAxis);
 
-    TODO kompletter Umbau
+    // 5. Röhrenkörper: Außenzylinder nach unten bis zur Platte extrudieren und verschmelzen
+    const legTube = createLegTube(rootComp, params, tiltedPlane, legAxis, baseBody);
 
-    - erzeuge analog zu fusion/scripts/complete-v4/complete-v4.ts eine Fußplatte mit Fußbein
-    - die geometrischen Daten der Platte soll genauso werden wie in complete-v4.ts
-    - Das Fußbein soll am oberen Ende einen Anschluss bekommen, damit es in eine Tetrapod-Node passt (fusion/scripts/complete-node-v5/complete-node-v5.ts):
-        --  also rohr mit Aussendurchmesser : 43.00mm-0.20mm am Ende , 20mm lang. analog fusion/scripts/thread-inlet-m40x2_5/thread-inlet-m40x2_5.ts
-        --  Restliche Audssemndurchmesser 48mm.
-     */
+    // 6. Oberer Anschluss-Steckzapfen (Stufenabsatz auf ringInnerDiameter zurückspringen)
+    cutStepShoulder(rootComp, params, legTube.sketch, legTube.body, legAxis);
 
-    let nodeBody = createPlate(rootComp, params);
-    nodeBody.name = 'Tetrapod_Plate';
+    // 7. Übergangsverrundung an der Verschneidungskante zwischen Bein und Basis-Platte
+    filletLegPlateJunction(rootComp, params, legTube.body, legAxis);
 
+    // 8. Durchgehende Innenbohrung entlang der Beinachse freischneiden
+    boreLegHole(rootComp, params, tiltedPlane, legTube.body, legAxis);
 
-    nodeBody.name = 'tetrapod-plate';
-    console.log('Erfolgreich als einzelner Tetrapod-Knoten generiert!');
+    // 9. Unterseite bündig schneiden (Überstand unterhalb Z = 0 abtrennen)
+    trimBottomFlush(rootComp, params);
+
+    // 10. Kabelkanal mit Fase an der Unterseite / im Plattenbereich einbringen
+    createCableHole(rootComp, params, legTube.body);
+
+    // Zielkörper benennen
+    const targetBody = getLiveBody(rootComp, legTube.body);
+    targetBody.name = 'Plate_Foot';
+
+    console.log('Baugruppe Plate_Foot erfolgreich generiert!');
 
   } catch (e) {
     console.error(`Failed: ${e}`);
@@ -85,7 +92,7 @@ function createCollection<T extends adsk.core.Base>(...items: (T | T[] | null | 
 }
 
 /**
- * Ermittelt den aktuellen Live-BRepBody aus den rootComp bRepBodies.
+ * Ermittelt den aktuellen Live-BRepBody aus rootComp.bRepBodies.
  */
 function getLiveBody(rootComp: adsk.fusion.Component, fallbackBody: adsk.fusion.BRepBody): adsk.fusion.BRepBody {
   if (rootComp.bRepBodies.count > 0) {
@@ -96,45 +103,22 @@ function getLiveBody(rootComp: adsk.fusion.Component, fallbackBody: adsk.fusion.
 }
 
 /**
- * Identifiziert auf einer Skizze das innere Kreisprofil und das äußere Ringprofil.
+ * Erzeugt eine Versatzebene (ConstructionPlane) zu einer Basis-Ebene.
+ * Beachtet die API-Best-Practices aus AGENTS.md (direkte Erzeugung via ValueInput).
  */
-function findInnerAndOuterProfiles(sketch: adsk.fusion.Sketch): {
-  innerProfile: adsk.fusion.Profile;
-  outerRingProfile: adsk.fusion.Profile;
-} {
-  let innerProfile: adsk.fusion.Profile | null = null;
-  let outerRingProfile: adsk.fusion.Profile | null = null;
-
-  for (let i = 0; i < sketch.profiles.count; i++) {
-    const prof = sketch.profiles.item(i);
-    if (prof.profileLoops.count === 1) {
-      innerProfile = prof;
-    } else {
-      outerRingProfile = prof;
-    }
-  }
-
-  if (!innerProfile || !outerRingProfile) {
-    const prof0 = sketch.profiles.item(0);
-    const prof1 = sketch.profiles.item(1);
-    if (prof0.areaProperties().area < prof1.areaProperties().area) {
-      innerProfile = prof0;
-      outerRingProfile = prof1;
-    } else {
-      innerProfile = prof1;
-      outerRingProfile = prof0;
-    }
-  }
-
-  return { innerProfile, outerRingProfile };
+function createOffsetPlane(
+  rootComp: adsk.fusion.Component,
+  basePlane: adsk.fusion.ConstructionPlane,
+  offsetCm: number
+): adsk.fusion.ConstructionPlane {
+  const constructionPlanes = rootComp.constructionPlanes;
+  const planeInput = constructionPlanes.createInput();
+  planeInput.setByOffset(basePlane, adsk.core.ValueInput.createByReal(offsetCm));
+  return constructionPlanes.add(planeInput);
 }
 
 /**
  * Wendet eine Verrundung (Fillet) mit mehrstufigem Fallback-Versuchssystem auf eine Kanten-Gruppe an.
- * Stufe A: Parameter-Name mit Tangentenkette
- * Stufe B: Direkter Zahlenwert mit Tangentenkette
- * Stufe C: Direkter Zahlenwert ohne Tangentenkette
- * Stufe D: Einzelkanten-Verrundung
  */
 function applyFilletWithFallbacks(
   rootComp: adsk.fusion.Component,
@@ -237,14 +221,11 @@ function applyFilletWithFallbacks(
 }
 
 // =====================================================================
-// PARAMETER SETUP & MODELLIERUNG
+// PARAMETER SETUP
 // =====================================================================
 
 /**
- * Richtet die Benutzerparameter in Fusion 360 ein oder ruft bestehende ab.
- *
- * @param design Das aktive Fusion 360 Design-Objekt.
- * @returns Ein Objekt mit allen relevanten UserParameters.
+ * Richtet die Benutzerparameter für die untere Baugruppe in Fusion 360 ein.
  */
 function setupParameters(design: adsk.fusion.Design) {
   const params = design.userParameters;
@@ -253,7 +234,14 @@ function setupParameters(design: adsk.fusion.Design) {
   function getOrCreateParam(name: string, valueStr: string, unit: string, description: string): adsk.fusion.UserParameter {
     let p = params.itemByName(name);
     if (!p) {
-      p = params.add(name, adsk.core.ValueInput.createByString(valueStr), unit, description);
+      const valInput = adsk.core.ValueInput.createByString(valueStr);
+      if (!valInput) {
+        throw new Error(`Ungültiger Parameterwert für '${name}': ${valueStr}`);
+      }
+      p = params.add(name, valInput, unit, description);
+      if (!p) {
+        throw new Error(`Parameter '${name}' konnte nicht erstellt werden.`);
+      }
     } else {
       try {
         p.expression = valueStr;
@@ -265,436 +253,696 @@ function setupParameters(design: adsk.fusion.Design) {
   }
 
   return {
-    armOuterDiameter: getOrCreateParam('arm_outer_diameter', '48mm', 'mm', 'Aussendurchmesser der Arme'),
-    armDepthLong: getOrCreateParam('arm_depth_long', '40mm', 'mm', 'Armlaenge aller 4 Arme gemessen vom Zentrum'),
-    ringInnerDiameter: getOrCreateParam('ring_inner_diameter', '43mm', 'mm', 'Innendurchmesser der Röhren (43mm)'),
-    innerBallDiameter: getOrCreateParam('inner_ball_diameter', '44mm', 'mm', 'Durchmesser des inneren Kugelloches (44mm)'),
-    nodeBoreDiameter: getOrCreateParam('node_bore_diameter', '43mm', 'mm', 'Durchmesser der Knoten-Bohrungen (43mm)'),
-    nodeBoreDepth: getOrCreateParam('node_bore_depth', '40mm', 'mm', 'Tiefe der Knoten-Bohrungen vom Zentrum (40mm)'),
-    nodeFilletRadius: getOrCreateParam('node_fillet_radius', '30mm', 'mm', 'Radius fuer die Tetrapod-Knotenabrundung (30mm)'),
-    innerNodeFilletRadius: getOrCreateParam('inner_node_fillet_radius', '22.5mm', 'mm', 'Radius fuer die inneren 6 Knoten-Kanten (22.5mm)')
+    basePlateDiameter: getOrCreateParam('base_plate_diameter', '160mm', 'mm', 'Durchmesser der runden Basis-Platte'),
+    basePlateHeight: getOrCreateParam('base_plate_height', '10mm', 'mm', 'Höhe der runden Basis-Platte'),
+    basePlateRounding: getOrCreateParam('base_plate_rounding', '2mm', 'mm', 'Abrundung der oberen Basis-Platte-Kante'),
+    legOuterDiameter: getOrCreateParam('arm_outer_diameter', '48mm', 'mm', 'Aussendurchmesser des Fußbeines'),
+    ringInnerDiameter: getOrCreateParam('ring_inner_diameter', '43mm', 'mm', 'Aussendurchmesser des oberen Anschluss-Steckzapfens'),
+    ringExtrudeDepth: getOrCreateParam('ring_extrude_depth', '17mm', 'mm', 'Länge des oberen Anschluss-Steckzapfens / Stufenabsatzes'),
+    footLegBoreDiameter: getOrCreateParam('foot_leg_bore_diameter', '34mm', 'mm', 'Innendurchmesser des Beins / Kabeldurchführung (34mm)'),
+    legLength: getOrCreateParam('leg_length', '100mm', 'mm', 'Länge des Beins von der Basis-Platte zum oberen Anschluss'),
+    legAngle: getOrCreateParam('leg_angle', '115deg', 'deg', 'Winkel des Beines zur Basis-Platte'),
+    legOffset: getOrCreateParam('leg_offset', '25mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
+    legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante zwischen Bein und Basis-Platte'),
+    cableHoleOffset: getOrCreateParam('cable_hole_offset', '90mm', 'mm', 'Versatz der Kabelkanal-Konstruktionsebene'),
+    cableHoleDiameter: getOrCreateParam('cable_hole_diameter', '7mm', 'mm', 'Durchmesser des Kabelkanallochs'),
+    cableHoleHeight: getOrCreateParam('cable_hole_height', '5.0mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite'),
+    cableHoleChamfer: getOrCreateParam('cable_hole_chamfer', '0.7mm', 'mm', 'Abfasung der Lochkanten des Kabelkanals')
   };
 }
 
+type Params = ReturnType<typeof setupParameters>;
+
 /**
- * Erstellt den Arm des Tetrapoden als durchgehende Röhre (OD 48mm, ID 43mm, Länge 80mm in -Z).
+ * Geometrische Eckdaten der geneigten Beinachse.
  */
-function createLongArm(
-  rootComp: adsk.fusion.Component,
-  params: ReturnType<typeof setupParameters>
-): adsk.fusion.BRepBody {
-  const sketches = rootComp.sketches;
-  const features = rootComp.features;
-  const extrudeFeatures = features.extrudeFeatures;
-  const xyPlane = rootComp.xYConstructionPlane;
+interface LegAxis {
+  start: adsk.core.Point3D;
+  end: adsk.core.Point3D;
+  dir: { x: number; y: number; z: number };
+  line: adsk.fusion.SketchLine;
+}
+
+/**
+ * Ergebnis der Bein-Röhren-Erstellung.
+ */
+interface LegTubeResult {
+  body: adsk.fusion.BRepBody;
+  sketch: adsk.fusion.Sketch;
+}
+
+// =====================================================================
+// GEOMETRIE-ERZEUGUNG
+// =====================================================================
+
+/**
+ * 1. Basis-Platte: Runder Grundkörper auf der XY-Ebene mit Verrundung der oberen Kante.
+ */
+function createBasePlate(rootComp: adsk.fusion.Component, params: Params): adsk.fusion.BRepBody {
   const center = adsk.core.Point3D.create(0, 0, 0);
+  const sketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
 
-  // Skizze auf der XY-Ebene erstellen
-  const sketch = sketches.add(xyPlane);
-  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.armOuterDiameter.value / 2.0);
-  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.ringInnerDiameter.value / 2.0);
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, params.basePlateDiameter.value / 2.0);
 
-  const { outerRingProfile } = findInnerAndOuterProfiles(sketch);
-
-  // Extrusion des äußeren Rings
-  const extInputRing = extrudeFeatures.createInput(outerRingProfile, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
-  const distanceExtent = '-arm_depth_long'; // Negative Richtung entlang der Z-Achse
-  extInputRing.setDistanceExtent(false, adsk.core.ValueInput.createByString(distanceExtent));
-  return extrudeFeatures.add(extInputRing).bodies.item(0);
-}
-
-/**
- * Orchestriert den Zusammenbau des einzelnen Tetrapoden.
- * Erzeugt 4 Arme im tetraedrischen Winkel.
- * - Arm 0 liegt auf der -Z Achse (parallel zur Z-Achse).
- */
-function createPlate(
-  rootComp: adsk.fusion.Component,
-  params: ReturnType<typeof setupParameters>
-): adsk.fusion.BRepBody {
-  const features = rootComp.features;
-  const moveFeats = features.moveFeatures;
-  const tetraAngle = adsk.core.ValueInput.createByString(TETRA_ANGLE_DEG_STR);
-
-  // Arm 0: Position -Z Achse (keine Rotation, parallel zur Z-Achse)
-  const arm0Body = createLongArm(rootComp, params);
-
-  // Arm 1: Um tetraAngle (109.47°) um Y-Achse rotieren
-  const arm1Body = createLongArm(rootComp, params);
-  const moveInput1 = moveFeats.createInput2(createCollection([arm1Body]));
-  moveInput1.defineAsRotate(rootComp.yConstructionAxis, tetraAngle);
-  moveFeats.add(moveInput1);
-
-  // Arm 2: Um tetraAngle um Y-Achse rotieren, dann 120° um Z-Achse rotieren
-  const arm2Body = createLongArm(rootComp, params);
-  const moveInput2 = moveFeats.createInput2(createCollection([arm2Body]));
-  const mat2 = adsk.core.Matrix3D.create();
-  mat2.setToRotation(TETRA_ANGLE_RAD, adsk.core.Vector3D.create(0, 1, 0), adsk.core.Point3D.create(0, 0, 0));
-  const rotZ120 = adsk.core.Matrix3D.create();
-  rotZ120.setToRotation((120.0 * Math.PI) / 180.0, adsk.core.Vector3D.create(0, 0, 1), adsk.core.Point3D.create(0, 0, 0));
-  mat2.transformBy(rotZ120);
-  moveInput2.defineAsFreeMove(mat2);
-  moveFeats.add(moveInput2);
-
-  // Arm 3: Um tetraAngle um Y-Achse rotieren, dann 240° um Z-Achse rotieren
-  const arm3Body = createLongArm(rootComp, params);
-  const moveInput3 = moveFeats.createInput2(createCollection([arm3Body]));
-  const mat3 = adsk.core.Matrix3D.create();
-  mat3.setToRotation(TETRA_ANGLE_RAD, adsk.core.Vector3D.create(0, 1, 0), adsk.core.Point3D.create(0, 0, 0));
-  const rotZ240 = adsk.core.Matrix3D.create();
-  rotZ240.setToRotation((240.0 * Math.PI) / 180.0, adsk.core.Vector3D.create(0, 0, 1), adsk.core.Point3D.create(0, 0, 0));
-  mat3.transformBy(rotZ240);
-  moveInput3.defineAsFreeMove(mat3);
-  moveFeats.add(moveInput3);
-
-  // Alle Arme zu einem einzigen Tetrapod-Körper verschmelzen
-  const toolBodies = createCollection([arm1Body, arm2Body, arm3Body]);
-  const combineFeatures = features.combineFeatures;
-  const combineInput = combineFeatures.createInput(arm0Body, toolBodies);
-  combineInput.operation = adsk.fusion.FeatureOperations.JoinFeatureOperation;
-  combineFeatures.add(combineInput);
-
-  return arm0Body;
-}
-
-/**
- * Schneidet eine Kugel mit dem Durchmesser innerBallDiameter direkt aus dem Zentrum (0,0,0) aus.
- */
-function cutInnerSphere(
-  rootComp: adsk.fusion.Component,
-  innerBallDiameterParam: adsk.fusion.UserParameter
-): void {
-  try {
-    const center = adsk.core.Point3D.create(0, 0, 0);
-    const sketches = rootComp.sketches;
-    const sketch = sketches.add(rootComp.xYConstructionPlane);
-
-    const radiusVal = innerBallDiameterParam.value / 2.0;
-
-    // Halbkreis im Ursprung zeichnen
-    const startPoint = adsk.core.Point3D.create(0, radiusVal, 0);
-    const arc = sketch.sketchCurves.sketchArcs.addByCenterStartSweep(
-      center,
-      startPoint,
-      Math.PI
-    );
-
-    // Schließlinie durch die Endpunkte des Bogens zeichnen
-    sketch.sketchCurves.sketchLines.addByTwoPoints(
-      arc.geometry.startPoint,
-      arc.geometry.endPoint
-    );
-
-    if (sketch.profiles.count === 0) {
-      return;
-    }
-    const profile = sketch.profiles.item(0);
-
-    // Profil direkt um die Y-Achse als Schnitt-Operation drehen
-    const revolveFeatures = rootComp.features.revolveFeatures;
-    const revolveInput = revolveFeatures.createInput(
-      profile,
-      rootComp.yConstructionAxis,
-      adsk.fusion.FeatureOperations.CutFeatureOperation
-    );
-
-    const angle = adsk.core.ValueInput.createByString('360 deg');
-    revolveInput.setAngleExtent(false, angle);
-
-    revolveFeatures.add(revolveInput);
-  } catch (e) {
-    console.log(`Zentrums-Kugelschnitt übersprungen (kein Zielkörper zum Schneiden oder bereits hohl): ${e}`);
+  if (sketch.profiles.count === 0) {
+    throw new Error('Kein Profil in der Basis-Platten-Skizze gefunden.');
   }
-}
+  const profile = sketch.profiles.item(0);
 
-/**
- * Bohrt am Knoten in die 4 tetrahedralen Richtungen vom Zentrum aus mit Durchmesser (43mm) und Tiefe (40mm).
- */
-function drillNodeBores(
-  rootComp: adsk.fusion.Component,
-  targetBody: adsk.fusion.BRepBody,
-  params: ReturnType<typeof setupParameters>
-): adsk.fusion.BRepBody {
-  const center = adsk.core.Point3D.create(0, 0, 0);
-
-  const boreDiamCm = params.nodeBoreDiameter.value; // 4.3 cm (43mm)
-  const boreDepthCm = params.nodeBoreDepth.value;   // 4.0 cm (40mm)
-
-  // Richtungsvektoren in lokalem Tetrapod-Koordinatensystem
-  const tetraAngle = TETRA_ANGLE_RAD;
-  const sinTetra = Math.sin(tetraAngle);
-  const cosTetra = Math.cos(tetraAngle);
-
-  // Arm 0: (0, 0, -1)
-  const v0 = adsk.core.Vector3D.create(0, 0, -1);
-
-  // Arm 1: (-sinTetra, 0, -cosTetra)
-  const v1 = adsk.core.Vector3D.create(-sinTetra, 0, -cosTetra);
-
-  // Arm 2: v1 rotieren um +120 deg um Z-Achse
-  const v2 = adsk.core.Vector3D.create(
-    0.5 * sinTetra,
-    -(Math.sqrt(3) / 2.0) * sinTetra,
-    -cosTetra
+  const extInput = rootComp.features.extrudeFeatures.createInput(
+    profile,
+    adsk.fusion.FeatureOperations.NewBodyFeatureOperation
   );
+  extInput.setDistanceExtent(false, adsk.core.ValueInput.createByString('base_plate_height'));
+  const extFeature = rootComp.features.extrudeFeatures.add(extInput);
+  if (!extFeature || extFeature.bodies.count === 0) {
+    throw new Error('Basis-Platte konnte nicht extrudiert werden.');
+  }
 
-  // Arm 3: v1 rotieren um +240 deg um Z-Achse
-  const v3 = adsk.core.Vector3D.create(
-    0.5 * sinTetra,
-    (Math.sqrt(3) / 2.0) * sinTetra,
-    -cosTetra
-  );
+  const plateBody = extFeature.bodies.item(0);
 
-  const armVectors = [v0, v1, v2, v3];
-  let currentBody = targetBody;
-
-  for (let armIdx = 0; armIdx < 4; armIdx++) {
-    const dirVec = armVectors[armIdx];
-    currentBody = cutBoreCylinder(
+  // Verrundung der oberen umlaufenden Kante (bei Z = base_plate_height)
+  const topEdge = findCircularEdgeAtZ(plateBody, params.basePlateHeight.value, params.basePlateDiameter.value / 2.0);
+  if (topEdge) {
+    applyFilletWithFallbacks(
       rootComp,
-      currentBody,
-      center,
-      dirVec,
-      boreDiamCm,
-      boreDepthCm,
-      `Node_Arm_${armIdx}`
+      [topEdge],
+      params.basePlateRounding.value,
+      'base_plate_rounding',
+      'Basis-Platte Obere Kante'
     );
   }
 
-  return currentBody;
+  return plateBody;
 }
 
 /**
- * Erzeugt einen Schneid-Zylinder mit Radius (diamCm/2) und Höhe (depthCm),
- * richtet dessen Achse entlang dirVec aus, positioniert den Fußpunkt auf nodeCenter
- * und führt eine Cut-Operation auf targetBody durch.
+ * Findet die umlaufende Kante auf einer bestimmten Z-Höhe anhand des Radius.
  */
-function cutBoreCylinder(
-  rootComp: adsk.fusion.Component,
-  targetBody: adsk.fusion.BRepBody,
-  nodeCenter: adsk.core.Point3D,
-  dirVec: adsk.core.Vector3D,
-  diamCm: number,
-  depthCm: number,
-  boreLabel: string
-): adsk.fusion.BRepBody {
-  try {
-    const sketches = rootComp.sketches;
-    const features = rootComp.features;
-    const extrudeFeatures = features.extrudeFeatures;
-    const combineFeatures = features.combineFeatures;
-    const moveFeatures = features.moveFeatures;
-
-    // 1. Zylinder im Ursprung auf XY-Ebene extrudieren (+Z Richtung: (0,0,1))
-    const sketch = sketches.add(rootComp.xYConstructionPlane);
-    sketch.sketchCurves.sketchCircles.addByCenterRadius(
-      adsk.core.Point3D.create(0, 0, 0),
-      diamCm / 2.0
-    );
-
-    if (sketch.profiles.count === 0) {
-      console.warn(`[drillBore] Kein Profil in Skizze fuer ${boreLabel} gefunden.`);
-      return targetBody;
-    }
-    const profile = sketch.profiles.item(0);
-
-    const extInput = extrudeFeatures.createInput(
-      profile,
-      adsk.fusion.FeatureOperations.NewBodyFeatureOperation
-    );
-    extInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(depthCm));
-    const extFeat = extrudeFeatures.add(extInput);
-    if (!extFeat || extFeat.bodies.count === 0) {
-      console.warn(`[drillBore] Extrusion fuer Zylinder ${boreLabel} fehlgeschlagen.`);
-      return targetBody;
-    }
-
-    const toolBody = extFeat.bodies.item(0);
-
-    // 2. Transformation berechnen: Lokale Z-Achse (0,0,1) nach dirVec drehen, dann nach nodeCenter verschieben
-    const localZ = adsk.core.Vector3D.create(0, 0, 1);
-    const transMat = adsk.core.Matrix3D.create();
-
-    const dot = localZ.dotProduct(dirVec);
-    if (Math.abs(dot - 1.0) < 1e-5) {
-      // Keine Rotation notwendig
-    } else if (Math.abs(dot + 1.0) < 1e-5) {
-      // 180° Rotation um X-Achse
-      transMat.setToRotation(Math.PI, adsk.core.Vector3D.create(1, 0, 0), adsk.core.Point3D.create(0, 0, 0));
-    } else {
-      const rotAxis = localZ.crossProduct(dirVec);
-      rotAxis.normalize();
-      const rotAngle = Math.acos(Math.min(1.0, Math.max(-1.0, dot)));
-      transMat.setToRotation(rotAngle, rotAxis, adsk.core.Point3D.create(0, 0, 0));
-    }
-
-    const shiftMat = adsk.core.Matrix3D.create();
-    shiftMat.translation = adsk.core.Vector3D.create(nodeCenter.x, nodeCenter.y, nodeCenter.z);
-    transMat.transformBy(shiftMat);
-
-    // Tool-Body an Position bewegen
-    const moveInput = moveFeatures.createInput2(createCollection([toolBody]));
-    moveInput.defineAsFreeMove(transMat);
-    moveFeatures.add(moveInput);
-
-    // 3. Cut-Operation (targetBody MINUS toolBody)
-    const toolColl = createCollection([toolBody]);
-    const combineInput = combineFeatures.createInput(targetBody, toolColl);
-    combineInput.operation = adsk.fusion.FeatureOperations.CutFeatureOperation;
-    const combineFeat = combineFeatures.add(combineInput);
-
-    if (combineFeat && combineFeat.bodies.count > 0) {
-      const res = combineFeat.bodies.item(0);
-      if (res) return res;
-    }
-  } catch (e) {
-    console.warn(`[drillBore] Fehler beim Bohren (${boreLabel}): ${e}`);
-  }
-
-  return getLiveBody(rootComp, targetBody);
-}
-
-/**
- * Findet die 6 echten 3D-Schnittkanten eines Tetrapod-Knotens um den Mittelpunkt.
- */
-function findNodeIntersectionEdges(
-  targetBody: adsk.fusion.BRepBody,
-  center: adsk.core.Point3D
-): adsk.fusion.BRepEdge[] {
-  const candidates: { edge: adsk.fusion.BRepEdge; dist: number; lenCm: number }[] = [];
-
-  for (let i = 0; i < targetBody.edges.count; i++) {
-    const edge = targetBody.edges.item(i);
+function findCircularEdgeAtZ(body: adsk.fusion.BRepBody, z: number, radius: number): adsk.fusion.BRepEdge | null {
+  const expectedLength = 2.0 * Math.PI * radius;
+  for (let i = 0; i < body.edges.count; i++) {
+    const edge = body.edges.item(i);
     if (!edge) continue;
 
-    const midPoint = edge.pointOnEdge;
-    if (!midPoint) continue;
+    const bb = edge.boundingBox;
+    if (!bb) continue;
 
-    const dist = midPoint.distanceTo(center);
-    if (dist < 4.8) {
-      const lenCm = edge.length;
-      if (Math.abs(lenCm - EDGE_LEN_NODE_INTERSECTION_CM) < 0.3) {
-        candidates.push({ edge, dist, lenCm });
+    if (Math.abs(bb.minPoint.z - z) <= TOL && Math.abs(bb.maxPoint.z - z) <= TOL) {
+      if (Math.abs(edge.length - expectedLength) <= Math.max(0.1, expectedLength * 0.05)) {
+        return edge;
       }
     }
   }
-
-  candidates.sort((a, b) => a.dist - b.dist);
-  return candidates.slice(0, 6).map(c => c.edge);
+  return null;
 }
 
 /**
- * Selektiert die 6 Außen-Schnittkanten um das Knoten-Zentrum und führt die Knotenabrundung durch.
+ * 2. Geneigte Bein-Achse: Referenzskizze auf der XZ-Ebene.
  */
-function applyNodeFillets(
+function createLegAxis(rootComp: adsk.fusion.Component, params: Params): LegAxis {
+  const angleRad = params.legAngle.value;
+  const dir = { x: Math.cos(angleRad), y: 0, z: Math.sin(angleRad) };
+  const legLen = params.legLength.value;
+  const offset = params.legOffset.value;
+
+  const start = adsk.core.Point3D.create(offset, 0, 0);
+  const end = adsk.core.Point3D.create(offset + legLen * dir.x, legLen * dir.y, legLen * dir.z);
+
+  const sketch = rootComp.sketches.add(rootComp.xZConstructionPlane);
+  const startSketch = sketch.modelToSketchSpace(start);
+  const endSketch = sketch.modelToSketchSpace(end);
+
+  const line = sketch.sketchCurves.sketchLines.addByTwoPoints(startSketch, endSketch);
+  line.isConstruction = true;
+
+  return { start, end, dir, line };
+}
+
+/**
+ * 3. Rechtwinklige Konstruktionsebene am oberen Endpunkt der Bein-Achse ("Plane Along Path").
+ */
+function createTiltedConstructionPlane(
   rootComp: adsk.fusion.Component,
-  targetBody: adsk.fusion.BRepBody,
-  params: ReturnType<typeof setupParameters>
-): void {
-  const liveBody = getLiveBody(rootComp, targetBody);
-  const center = adsk.core.Point3D.create(0, 0, 0);
+  legAxis: LegAxis
+): adsk.fusion.ConstructionPlane {
+  const planes = rootComp.constructionPlanes;
 
-  if (ui) {
-    try {
-      ui.activeSelections.clear();
-    } catch (_e) { }
-  }
-
-  const edges = findNodeIntersectionEdges(liveBody, center);
-
-  if (ui) {
-    for (const edge of edges) {
-      try {
-        ui.activeSelections.add(edge);
-      } catch (_e) { }
+  // Primär: Ebene entlang der Pfadlinie am Bein-Kopf (Endpunkt, distance = 1.0)
+  const input = planes.createInput();
+  if (input) {
+    if (input.setByDistanceOnPath(legAxis.line, adsk.core.ValueInput.createByReal(1.0))) {
+      const plane = planes.add(input);
+      if (plane) return plane;
     }
   }
 
-  console.log(`Step: ${edges.length} von 6 Knoten-Schnittkanten (51.514mm) selektiert.`);
+  // Fallback: Ebene durch 3 Punkte
+  const sketch = legAxis.line.parentSketch;
+  const endPt = legAxis.line.endSketchPoint;
+  const sketchPoints = sketch ? sketch.sketchPoints : null;
+  const p1 = sketchPoints ? sketchPoints.add(adsk.core.Point3D.create(legAxis.end.x, legAxis.end.y + 1.0, legAxis.end.z)) : null;
+  const p2 = sketchPoints ? sketchPoints.add(adsk.core.Point3D.create(legAxis.end.x + legAxis.dir.z, legAxis.end.y, legAxis.end.z - legAxis.dir.x)) : null;
 
-  if (edges.length > 0) {
-    applyFilletWithFallbacks(
-      rootComp,
-      edges,
-      params.nodeFilletRadius.value,
-      'node_fillet_radius',
-      'Knotenabrundung'
-    );
+  const fallback = planes.createInput();
+  if (fallback && p1 && p2 && endPt && fallback.setByThreePoints(endPt, p1, p2)) {
+    const plane = planes.add(fallback);
+    if (plane) return plane;
   }
+
+  throw new Error('Geneigte Konstruktionsebene am Beinkopf konnte nicht erstellt werden.');
 }
 
 /**
- * Findet die 6 inneren 3D-Schnittkanten der inneren Röhrenwände eines Tetrapod-Knotens um den Mittelpunkt.
+ * 4. Äußerer Bein-Röhrenkörper:
+ *    - Skizze auf der geneigten Konstruktionsebene mit Außenkreis (legOuterDiameter) und Innenkreis (ringInnerDiameter)
+ *    - Extrusion nach unten bis zur Basis-Platte und Vereinigung per Join
  */
-function findInnerNodeIntersectionEdges(
-  targetBody: adsk.fusion.BRepBody,
-  center: adsk.core.Point3D,
-  innerRadiusCm: number
-): adsk.fusion.BRepEdge[] {
-  const candidates: { edge: adsk.fusion.BRepEdge; dist: number; lenCm: number }[] = [];
+function createLegTube(
+  rootComp: adsk.fusion.Component,
+  params: Params,
+  tiltedPlane: adsk.fusion.ConstructionPlane,
+  _legAxis: LegAxis,
+  baseBody: adsk.fusion.BRepBody
+): LegTubeResult {
+  const outerRadius = params.legOuterDiameter.value / 2.0;
+  const innerRadius = params.ringInnerDiameter.value / 2.0;
 
-  for (let i = 0; i < targetBody.edges.count; i++) {
-    const edge = targetBody.edges.item(i);
-    if (!edge) continue;
+  const sketch = rootComp.sketches.add(tiltedPlane);
+  const centerPoint = adsk.core.Point3D.create(0, 0, 0);
 
-    const midPoint = edge.pointOnEdge;
-    if (!midPoint) continue;
+  // Zuerst Außenkreis zeichnen
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, outerRadius);
 
-    const dist = midPoint.distanceTo(center);
-    if (dist < 4.8) {
-      let isInnerCylinderEdge = false;
-      for (let f = 0; f < edge.faces.count; f++) {
-        const face = edge.faces.item(f);
-        if (face && face.geometry.surfaceType === adsk.core.SurfaceTypes.CylinderSurfaceType) {
-          const cyl = face.geometry as adsk.core.Cylinder;
-          if (Math.abs(cyl.radius - innerRadiusCm) < 0.15) {
-            isInnerCylinderEdge = true;
-            break;
+  if (sketch.profiles.count < 1) {
+    throw new Error('Erwartetes Profil in der Bein-Skizze nicht gefunden.');
+  }
+
+  const legBody = extrudeAlongAxisDown(rootComp, sketch, params);
+
+  // Anschließend inneren Kreis für den Steckzapfen-Stufenabsatz hinzufügen
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, innerRadius);
+
+  // Mit der Basis-Platte kombinieren (Join)
+  const combined = joinBodies(rootComp, baseBody, [legBody]);
+
+  return { body: combined, sketch };
+}
+
+/**
+ * Extrudiert den vollen Außenzylinder entlang der Beinachse nach unten in die Basis-Platte.
+ */
+function extrudeAlongAxisDown(
+  rootComp: adsk.fusion.Component,
+  sketch: adsk.fusion.Sketch,
+  params: Params
+): adsk.fusion.BRepBody {
+  const extrudeFeatures = rootComp.features.extrudeFeatures;
+  const targetZ = params.basePlateHeight.value;
+
+  let profileArg: adsk.core.Base;
+  if (sketch.profiles.count === 1) {
+    profileArg = sketch.profiles.item(0)!;
+  } else {
+    const profileColl = adsk.core.ObjectCollection.create();
+    for (let i = 0; i < sketch.profiles.count; i++) {
+      const prof = sketch.profiles.item(i);
+      if (prof) profileColl.add(prof);
+    }
+    profileArg = profileColl;
+  }
+
+  const totalDistReal = params.legLength.value + params.basePlateHeight.value + 2.0;
+
+  const strategies: Array<{ name: string; run: () => adsk.fusion.ExtrudeFeature | null }> = [
+    {
+      name: "Positiv-String ('leg_length + base_plate_height')",
+      run: () => {
+        const input = extrudeFeatures.createInput(profileArg, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+        const dist = adsk.core.ValueInput.createByString('leg_length + base_plate_height');
+        if (input && dist) {
+          input.setDistanceExtent(false, dist);
+          return extrudeFeatures.add(input);
+        }
+        return null;
+      }
+    },
+    {
+      name: "Reale Distanz positiv",
+      run: () => {
+        const input = extrudeFeatures.createInput(profileArg, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+        const dist = adsk.core.ValueInput.createByReal(totalDistReal);
+        if (input && dist) {
+          input.setDistanceExtent(false, dist);
+          return extrudeFeatures.add(input);
+        }
+        return null;
+      }
+    },
+    {
+      name: "Negativ-String ('-leg_length - base_plate_height')",
+      run: () => {
+        const input = extrudeFeatures.createInput(profileArg, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+        const dist = adsk.core.ValueInput.createByString('-leg_length - base_plate_height');
+        if (input && dist) {
+          input.setDistanceExtent(false, dist);
+          return extrudeFeatures.add(input);
+        }
+        return null;
+      }
+    },
+    {
+      name: "Reale Distanz negativ",
+      run: () => {
+        const input = extrudeFeatures.createInput(profileArg, adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
+        const dist = adsk.core.ValueInput.createByReal(-1.0 * totalDistReal);
+        if (input && dist) {
+          input.setDistanceExtent(false, dist);
+          return extrudeFeatures.add(input);
+        }
+        return null;
+      }
+    }
+  ];
+
+  for (const strat of strategies) {
+    try {
+      const extFeature = strat.run();
+      if (extFeature && extFeature.bodies.count > 0) {
+        const body = extFeature.bodies.item(0);
+        if (body) {
+          const minZ = body.boundingBox.minPoint.z;
+          if (minZ < targetZ + TOL) {
+            return body;
           }
         }
+        extFeature.deleteMe();
+      } else if (extFeature) {
+        extFeature.deleteMe();
       }
-
-      if (isInnerCylinderEdge) {
-        candidates.push({ edge, dist, lenCm: edge.length });
-      }
+    } catch (_err) {
+      // Nächste Strategie testen
     }
   }
 
-  candidates.sort((a, b) => a.dist - b.dist);
-  return candidates.slice(0, 6).map(c => c.edge);
+  throw new Error('Extrusion des Fußbeins in Richtung der Basis-Platte ist fehlgeschlagen.');
 }
 
 /**
- * Selektiert die 6 inneren Schnittkanten um das Knoten-Zentrum und führt die Innenabrundung mit 22.5mm tangential durch.
+ * Kombiniert Werkzeugkörper mit dem Zielkörper per Join.
  */
-function applyInnerNodeFillets(
+function joinBodies(
   rootComp: adsk.fusion.Component,
-  targetBody: adsk.fusion.BRepBody,
-  params: ReturnType<typeof setupParameters>
+  target: adsk.fusion.BRepBody,
+  tools: adsk.fusion.BRepBody[]
+): adsk.fusion.BRepBody {
+  const toolColl = adsk.core.ObjectCollection.create();
+  for (const t of tools) {
+    toolColl.add(t);
+  }
+  const combineInput = rootComp.features.combineFeatures.createInput(target, toolColl);
+  combineInput.operation = adsk.fusion.FeatureOperations.JoinFeatureOperation;
+  const combineFeature = rootComp.features.combineFeatures.add(combineInput);
+  if (!combineFeature) {
+    throw new Error('Körper konnten nicht per Join vereinigt werden.');
+  }
+  return target;
+}
+
+/**
+ * 5. Oberer Anschluss-Steckzapfen:
+ *    Schneidet das äußere Ring-Profil am oberen Ende um ringExtrudeDepth zurück,
+ *    sodass der zylindrische Steckzapfen mit ringInnerDiameter stehen bleibt.
+ */
+function cutStepShoulder(
+  rootComp: adsk.fusion.Component,
+  params: Params,
+  sketch: adsk.fusion.Sketch,
+  body: adsk.fusion.BRepBody,
+  legAxis: LegAxis
 ): void {
-  const liveBody = getLiveBody(rootComp, targetBody);
-  const center = adsk.core.Point3D.create(0, 0, 0);
+  const innerRadius = params.ringInnerDiameter.value / 2.0;
+  const extrudeFeatures = rootComp.features.extrudeFeatures;
 
-  const innerRadiusCm = params.ringInnerDiameter.value / 2.0;
-  const edges = findInnerNodeIntersectionEdges(liveBody, center, innerRadiusCm);
-
-  if (ui) {
-    for (const edge of edges) {
-      try {
-        ui.activeSelections.add(edge);
-      } catch (_e) { }
+  // Ring-Profil in der Bein-Skizze suchen (2 Loops)
+  let ringProfile: adsk.fusion.Profile | null = null;
+  for (let i = 0; i < sketch.profiles.count; i++) {
+    const prof = sketch.profiles.item(i);
+    if (prof && prof.profileLoops.count === 2) {
+      ringProfile = prof;
+      break;
     }
   }
 
-  console.log(`Innere Abrundung: ${edges.length} von 6 inneren Knoten-Schnittkanten selektiert.`);
+  if (!ringProfile) {
+    throw new Error('Ring-Profil für den oberen Anschluss-Steckzapfen nicht gefunden.');
+  }
+
+  const depthReal = params.ringExtrudeDepth.value;
+
+  const strategies: Array<() => adsk.fusion.ExtrudeFeature | null> = [
+    () => {
+      const input = extrudeFeatures.createInput(ringProfile!, adsk.fusion.FeatureOperations.CutFeatureOperation);
+      const dist = adsk.core.ValueInput.createByString('-ring_extrude_depth');
+      if (input && dist) {
+        input.setDistanceExtent(false, dist);
+        return extrudeFeatures.add(input);
+      }
+      return null;
+    },
+    () => {
+      const input = extrudeFeatures.createInput(ringProfile!, adsk.fusion.FeatureOperations.CutFeatureOperation);
+      const dist = adsk.core.ValueInput.createByReal(-1.0 * depthReal);
+      if (input && dist) {
+        input.setDistanceExtent(false, dist);
+        return extrudeFeatures.add(input);
+      }
+      return null;
+    },
+    () => {
+      const input = extrudeFeatures.createInput(ringProfile!, adsk.fusion.FeatureOperations.CutFeatureOperation);
+      const dist = adsk.core.ValueInput.createByString('ring_extrude_depth');
+      if (input && dist) {
+        input.setDistanceExtent(false, dist);
+        return extrudeFeatures.add(input);
+      }
+      return null;
+    },
+    () => {
+      const input = extrudeFeatures.createInput(ringProfile!, adsk.fusion.FeatureOperations.CutFeatureOperation);
+      const dist = adsk.core.ValueInput.createByReal(depthReal);
+      if (input && dist) {
+        input.setDistanceExtent(false, dist);
+        return extrudeFeatures.add(input);
+      }
+      return null;
+    }
+  ];
+
+  for (const strat of strategies) {
+    try {
+      const cutFeature = strat();
+      if (cutFeature) {
+        if (hasCylinderOfRadius(body, innerRadius, legAxis.dir)) {
+          return;
+        }
+        cutFeature.deleteMe();
+      }
+    } catch (_err) {
+      // Nächste Strategie testen
+    }
+  }
+
+  throw new Error('Oberer Anschluss-Steckzapfen (Stufenabsatz) konnte nicht erzeugt werden.');
+}
+
+/**
+ * Prüft, ob der Körper eine Zylinderfläche mit dem gesuchten Radius trägt.
+ */
+function hasCylinderOfRadius(
+  body: adsk.fusion.BRepBody,
+  radius: number,
+  axisDir?: { x: number; y: number; z: number }
+): boolean {
+  for (let i = 0; i < body.faces.count; i++) {
+    const face = body.faces.item(i);
+    if (!face || face.geometry.surfaceType !== adsk.core.SurfaceTypes.CylinderSurfaceType) continue;
+
+    const surf = face.geometry as unknown as {
+      radius?: number;
+      axis?: { direction?: { x: number; y: number; z: number } };
+    };
+
+    if (surf.radius === undefined || Math.abs(surf.radius - radius) > TOL) {
+      continue;
+    }
+    if (axisDir) {
+      const d = surf.axis && surf.axis.direction;
+      if (d) {
+        const dot = Math.abs(d.x * axisDir.x + d.y * axisDir.y + d.z * axisDir.z);
+        if (dot < 0.99) continue;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * 6. Übergangsverrundung (Fillet) an der Verschneidungskante zwischen Bein und Basis-Platte.
+ */
+function filletLegPlateJunction(
+  rootComp: adsk.fusion.Component,
+  params: Params,
+  body: adsk.fusion.BRepBody,
+  _legAxis: LegAxis
+): void {
+  const plateTopZ = params.basePlateHeight.value;
+  const legOuterRadius = params.legOuterDiameter.value / 2.0;
+  const expectedLen = 2.0 * Math.PI * legOuterRadius;
+
+  const edges: adsk.fusion.BRepEdge[] = [];
+  for (let i = 0; i < body.edges.count; i++) {
+    const edge = body.edges.item(i);
+    if (!edge) continue;
+
+    const bb = edge.boundingBox;
+    if (!bb) continue;
+
+    if (Math.abs(bb.minPoint.z - plateTopZ) <= TOL && Math.abs(bb.maxPoint.z - plateTopZ) <= TOL) {
+      if (Math.abs(edge.length - expectedLen) <= Math.max(0.5, expectedLen * 0.4)) {
+        edges.push(edge);
+      }
+    }
+  }
 
   if (edges.length > 0) {
     applyFilletWithFallbacks(
       rootComp,
       edges,
-      params.innerNodeFilletRadius.value,
-      'inner_node_fillet_radius',
-      'Innere Knotenabrundung (22.5mm)'
+      params.legPlateRounding.value,
+      'leg_plate_rounding',
+      'Leg-Plate Junction'
     );
+  }
+}
+
+/**
+ * 7. Durchgehende Innenbohrung:
+ *    Skizze auf der oberen geneigten Konstruktionsebene mit footLegBoreDiameter
+ *    als durchgehender Schnitt (Cut) entlang der Beinachse.
+ */
+function boreLegHole(
+  rootComp: adsk.fusion.Component,
+  params: Params,
+  tiltedPlane: adsk.fusion.ConstructionPlane,
+  body: adsk.fusion.BRepBody,
+  legAxis: LegAxis
+): void {
+  const holeRadius = params.footLegBoreDiameter.value / 2.0;
+
+  const sketch = rootComp.sketches.add(tiltedPlane);
+  const centerPoint = adsk.core.Point3D.create(0, 0, 0);
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, holeRadius);
+
+  if (sketch.profiles.count < 1) {
+    throw new Error('Kein Profil für die Innenbohrung gefunden.');
+  }
+  const profile = sketch.profiles.item(0);
+
+  const extrudeFeatures = rootComp.features.extrudeFeatures;
+  const totalDistReal = params.legLength.value + params.basePlateHeight.value + 5.0;
+
+  const strategies: Array<() => adsk.fusion.ExtrudeFeature | null> = [
+    () => {
+      const input = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+      const dist = adsk.core.ValueInput.createByString('-leg_length - base_plate_height - 50mm');
+      if (input && dist) {
+        input.setDistanceExtent(false, dist);
+        return extrudeFeatures.add(input);
+      }
+      return null;
+    },
+    () => {
+      const input = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+      const dist = adsk.core.ValueInput.createByReal(-1.0 * totalDistReal);
+      if (input && dist) {
+        input.setDistanceExtent(false, dist);
+        return extrudeFeatures.add(input);
+      }
+      return null;
+    },
+    () => {
+      const input = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+      const dist = adsk.core.ValueInput.createByString('leg_length + base_plate_height + 50mm');
+      if (input && dist) {
+        input.setDistanceExtent(false, dist);
+        return extrudeFeatures.add(input);
+      }
+      return null;
+    },
+    () => {
+      const input = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+      const dist = adsk.core.ValueInput.createByReal(totalDistReal);
+      if (input && dist) {
+        input.setDistanceExtent(false, dist);
+        return extrudeFeatures.add(input);
+      }
+      return null;
+    }
+  ];
+
+  for (const strat of strategies) {
+    try {
+      const cutFeature = strat();
+      if (cutFeature) {
+        if (hasCylinderOfRadius(body, holeRadius, legAxis.dir)) {
+          return;
+        }
+        cutFeature.deleteMe();
+      }
+    } catch (_err) {
+      // Nächste Strategie testen
+    }
+  }
+
+  throw new Error('Durchgehende Innenbohrung des Fußbeins konnte nicht erzeugt werden.');
+}
+
+/**
+ * 8. Unterseite bündig schneiden:
+ *    Schneidet alle Geometrieüberstände unterhalb der XY-Ebene (Z < 0) ab.
+ */
+function trimBottomFlush(rootComp: adsk.fusion.Component, params: Params): void {
+  const sketch = rootComp.sketches.add(rootComp.xYConstructionPlane);
+  const center = adsk.core.Point3D.create(0, 0, 0);
+
+  const cutRadius = params.basePlateDiameter.value;
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(center, cutRadius);
+
+  if (sketch.profiles.count === 0) return;
+  const profile = sketch.profiles.item(0);
+
+  const extrudeFeatures = rootComp.features.extrudeFeatures;
+  const cutInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+
+  const fallbackDist = adsk.core.ValueInput.createByReal(-1.0 * (params.legLength.value + params.basePlateHeight.value));
+  cutInput.setDistanceExtent(false, fallbackDist);
+  try {
+    extrudeFeatures.add(cutInput);
+  } catch (_e) { }
+}
+
+/**
+ * 9. Kabelkanal mit Fase:
+ *    a) Versatzebene zur YZ-Ebene bei cableHoleOffset
+ *    b) Kreis mit Durchmesser cableHoleDiameter bei Z = cableHoleHeight
+ *    c) Extrusion (Cut) in das zentrale Fußbein
+ *    d) Abfasung der Lochkanten mit cableHoleChamfer
+ */
+function createCableHole(
+  rootComp: adsk.fusion.Component,
+  params: Params,
+  body: adsk.fusion.BRepBody
+): void {
+  const holeOffset = params.cableHoleOffset.value;
+  const holeRadius = params.cableHoleDiameter.value / 2.0;
+  const holeHeight = params.cableHoleHeight.value;
+
+  const offsetPlane = createOffsetPlane(rootComp, rootComp.yZConstructionPlane, holeOffset);
+  const sketch = rootComp.sketches.add(offsetPlane);
+
+  const center3D = adsk.core.Point3D.create(holeOffset, 0, holeHeight);
+  const centerPoint = sketch.modelToSketchSpace(center3D);
+  sketch.sketchCurves.sketchCircles.addByCenterRadius(centerPoint, holeRadius);
+
+  if (sketch.profiles.count === 0) {
+    throw new Error('Profil für den Kabelkanal nicht gefunden.');
+  }
+  const profile = sketch.profiles.item(0);
+
+  const extrudeFeatures = rootComp.features.extrudeFeatures;
+  const cutInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
+
+  // Extrusion in Richtung Ursprung / Fußbein
+  const cutDistance = -(holeOffset + 1.0);
+  cutInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(cutDistance));
+
+  const cutFeature = extrudeFeatures.add(cutInput);
+  if (!cutFeature) {
+    throw new Error('Kabelkanal konnte nicht geschnitten werden.');
+  }
+
+  // Abfasung der Kabelkanalkanten
+  const chamferVal = params.cableHoleChamfer.value;
+  if (chamferVal > 0) {
+    chamferCableHoleOpenings(rootComp, params, body);
+  }
+}
+
+/**
+ * Bringt eine Abfasung an den Öffnungskanten des Kabelkanals an.
+ */
+function chamferCableHoleOpenings(
+  rootComp: adsk.fusion.Component,
+  params: Params,
+  body: adsk.fusion.BRepBody
+): void {
+  const chamferVal = params.cableHoleChamfer.value;
+  if (chamferVal <= 0) return;
+
+  const targetRadius = params.cableHoleDiameter.value / 2.0;
+  const chamferEdges: adsk.fusion.BRepEdge[] = [];
+
+  for (let i = 0; i < body.edges.count; i++) {
+    const edge = body.edges.item(i);
+    if (!edge) continue;
+
+    for (let f = 0; f < edge.faces.count; f++) {
+      const face = edge.faces.item(f);
+      if (face && face.geometry.surfaceType === adsk.core.SurfaceTypes.CylinderSurfaceType) {
+        const cyl = face.geometry as unknown as { radius?: number };
+        if (cyl.radius !== undefined && Math.abs(cyl.radius - targetRadius) < 0.05) {
+          if (!chamferEdges.includes(edge)) {
+            chamferEdges.push(edge);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  if (chamferEdges.length > 0) {
+    const chamferFeatures = rootComp.features.chamferFeatures;
+    const chamferInput = chamferFeatures.createInput2();
+    const edgeColl = createCollection(chamferEdges);
+
+    let valInput = adsk.core.ValueInput.createByString('cable_hole_chamfer');
+    if (!valInput) {
+      valInput = adsk.core.ValueInput.createByReal(chamferVal);
+    }
+
+    chamferInput.chamferEdgeSets.addEqualDistanceChamferEdgeSet(
+      edgeColl,
+      valInput,
+      true
+    );
+
+    try {
+      chamferFeatures.add(chamferInput);
+    } catch (e) {
+      console.warn(`Fehler beim Erstellen der Kabelkanal-Fase: ${e}`);
+      try {
+        const fallbackInput = chamferFeatures.createInput2();
+        fallbackInput.chamferEdgeSets.addEqualDistanceChamferEdgeSet(
+          edgeColl,
+          adsk.core.ValueInput.createByReal(chamferVal),
+          true
+        );
+        chamferFeatures.add(fallbackInput);
+      } catch (err2) {
+        console.warn(`Fallback-Fase ebenfalls fehlgeschlagen: ${err2}`);
+      }
+    }
   }
 }
