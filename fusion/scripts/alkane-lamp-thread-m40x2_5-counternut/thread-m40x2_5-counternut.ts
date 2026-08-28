@@ -6,12 +6,12 @@ const ui = app ? app.userInterface : null;
 /**
  * @file thread-m40x2_5-counternut.ts
  * @description Fusion 360 Skript zur Erzeugung einer M40x2.5 Kontermutter (Locknut)
- * mit 4mm Gesamtlänge, Außendurchmesser 46mm, abgerundeten Außenkanten und einer 
+ * mit 4mm Gesamtlänge, Außendurchmesser 48mm, abgerundeten Außenkanten und einer 
  * am Ende integrierten 85%-offenen Scheibe (34mm Öffnung).
  * Optimiert für den FDM-3D-Druck (z.B. Bambu Lab P2S) mit anpassbarem Gewindespiel.
  *
  * ## Technische CAD-Kennwerte:
- * - Nenn-Außendurchmesser (nut_outer_diameter): 46.0 mm
+ * - Nenn-Außendurchmesser (nut_outer_diameter): 48.0 mm
  * - Gesamtlänge / Nut-Dicke (nut_height): 4.0 mm
  * - Integrierte Endscheibe (disc_thickness): 1.0 mm
  * - Scheibenöffnung (disc_hole_diameter): 34.0 mm (85% des M40 Nenninnendurchmessers)
@@ -43,7 +43,7 @@ export function run(_context: string): void {
     const targetBody = createCounternut(rootComp, params);
     targetBody.name = 'thread-m40x2_5-counternut-4mm';
 
-    console.log('M40x2.5 Kontermutter (4mm Länge, 46mm OD, 85% offene Endscheibe) erfolgreich erzeugt!');
+    console.log('M40x2.5 Kontermutter (4mm Länge, 48mm OD, 85% offene Endscheibe) erfolgreich erzeugt!');
 
   } catch (e) {
     console.error(`Failed: ${e}`);
@@ -79,7 +79,7 @@ function setupParameters(design: adsk.fusion.Design) {
   }
 
   return {
-    nutOuterDiameter: getOrCreateParam('nut_outer_diameter', '46mm', 'mm', 'Außendurchmesser der Kontermutter'),
+    nutOuterDiameter: getOrCreateParam('nut_outer_diameter', '48mm', 'mm', 'Außendurchmesser der Kontermutter'),
     nutHeight: getOrCreateParam('nut_height', '4mm', 'mm', 'Gesamtlänge / Höhe der Kontermutter'),
     innerDiameter: getOrCreateParam('inner_diameter', '40mm', 'mm', 'Nenn-Innendurchmesser der Gewindebohrung (M40)'),
     discThickness: getOrCreateParam('disc_thickness', '1mm', 'mm', 'Dicke der integrierten Endscheibe'),
@@ -106,7 +106,7 @@ function createCounternut(
   const center3D = adsk.core.Point3D.create(0, 0, 0);
 
   // Dimensionen in Zentimetern (Fusion 360 API Standardeinheit)
-  const outerRadiusCm = params.nutOuterDiameter.value / 2.0;   // 46mm / 2 = 2.3 cm
+  const outerRadiusCm = params.nutOuterDiameter.value / 2.0;   // 48mm / 2 = 2.4 cm
   const innerRadiusCm = params.innerDiameter.value / 2.0;      // 40mm / 2 = 2.0 cm
   const totalHeightCm = params.nutHeight.value;                 // 4mm = 0.4 cm
   const discThicknessCm = params.discThickness.value;           // 1mm = 0.1 cm
