@@ -83,9 +83,9 @@ function setupParameters(design: adsk.fusion.Design) {
   }
 
   return {
-    stopperOuterDiameter: getOrCreateParam('stopper_outer_diameter', '46mm', 'mm', 'Außendurchmesser der Stopkante'),
-    stopperLength: getOrCreateParam('stopper_length', '2mm', 'mm', 'Länge/Dicke der Stopkante'),
-    pipeLength: getOrCreateParam('pipe_length', '60mm', 'mm', 'Gesamtlänge des Inlets'),
+    stopperOuterDiameter: getOrCreateParam('stopper_outer_diameter', '48mm', 'mm', 'Außendurchmesser der Stopkante'),
+    stopperLength: getOrCreateParam('stopper_length', '22mm', 'mm', 'Länge/Dicke der Stopkante'),
+    pipeLength: getOrCreateParam('pipe_length', '40mm', 'mm', 'Gesamtlänge des Inlets'),
     pipeInnerDiameter: getOrCreateParam('pipe_inner_diameter', '40mm', 'mm', 'Innendurchmesser des Inlets (Gewindebohrung)'),
     tubeInnerDiameter: getOrCreateParam('tube_inner_diameter', '43mm', 'mm', 'Nenn-Innendurchmesser des Aufnahme-Rohres (43.0mm)'),
     outerDiameter: getOrCreateParam('outer_diameter', '43mm', 'mm', 'Nenn-Außendurchmesser des Inlets (43.0mm)'),
