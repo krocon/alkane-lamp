@@ -265,6 +265,7 @@ function setupParameters(design: adsk.fusion.Design) {
     legOffset: getOrCreateParam('leg_offset', '25mm', 'mm', 'Abstand des Bein-Fußpunktes vom Plattenmittelpunkt'),
     legPlateRounding: getOrCreateParam('leg_plate_rounding', '4mm', 'mm', 'Abrundung der Kante zwischen Bein und Basis-Platte'),
     cableHoleOffset: getOrCreateParam('cable_hole_offset', '90mm', 'mm', 'Versatz der Kabelkanal-Konstruktionsebene'),
+    cableHoleDepth: getOrCreateParam('cable_hole_depth', '70mm', 'mm', 'Schnitttiefe des Kabelkanals (70mm)'),
     cableHoleDiameter: getOrCreateParam('cable_hole_diameter', '7mm', 'mm', 'Durchmesser des Kabelkanallochs'),
     cableHoleHeight: getOrCreateParam('cable_hole_height', '5.0mm', 'mm', 'Höhe des Kabelkanallochs über der Unterseite'),
     cableHoleChamfer: getOrCreateParam('cable_hole_chamfer', '0.7mm', 'mm', 'Abfasung der Lochkanten des Kabelkanals')
@@ -864,9 +865,12 @@ function createCableHole(
   const extrudeFeatures = rootComp.features.extrudeFeatures;
   const cutInput = extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation);
 
-  // Extrusion in Richtung Ursprung / Fußbein
-  const cutDistance = -(holeOffset + 1.0);
-  cutInput.setDistanceExtent(false, adsk.core.ValueInput.createByReal(cutDistance));
+  // Extrusion in Richtung Ursprung / Fußbein (-70mm)
+  let valInput = adsk.core.ValueInput.createByString('-cable_hole_depth');
+  if (!valInput) {
+    valInput = adsk.core.ValueInput.createByReal(-params.cableHoleDepth.value);
+  }
+  cutInput.setDistanceExtent(false, valInput);
 
   const cutFeature = extrudeFeatures.add(cutInput);
   if (!cutFeature) {
