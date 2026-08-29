@@ -1,0 +1,12 @@
+{
+	"autodeskProduct":	"Fusion",
+	"type":	"script",
+	"author":	"Marc Kronberg",
+	"description":	{
+		"":	"3x Tetrapod Nodes (gestaffelt / staggered 60 deg) for Alkane Lamp"
+	},
+	"version":	"1.0.0",
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true,
+	"iconFilename":	"ScriptIcon.svg"
+}
