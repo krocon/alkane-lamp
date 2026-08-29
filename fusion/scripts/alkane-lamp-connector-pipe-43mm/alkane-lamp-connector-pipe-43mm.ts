@@ -7,13 +7,16 @@ const ui = app ? app.userInterface : null;
 /**
  * @file alkane-lamp-connector-pipe-43mm.ts
  * @description Fusion 360 Skript zur Erzeugung eines Verbindungsrohres (Connector Pipe 43mm)
- * für die Alkane-Lamp Baugruppe (optimiert für den FDM-3D-Druck auf Bambu Lab P2S).
+ * mit zentriertem Anschlagring für die Alkane-Lamp Baugruppe (optimiert für den FDM-3D-Druck auf Bambu Lab P2S).
  *
  * ## Technische CAD-Kennwerte:
- * - Außendurchmesser (outer_diameter): 42.80 mm (Nennmaß 43.0 mm mit -0.20 mm Passungsspiel)
- * - Innendurchmesser (inner_diameter): 36.00 mm
- * - Gesamtlänge (pipe_length): 40.00 mm
- * - Äußere Einführfase (outer_chamfer): 1.00 mm an den äußeren Mantelkanten
+ * - Nenn-Außendurchmesser (outer_diameter): 43.00 mm
+ * - Passungsspiel Außendurchmesser (outer_clearance): -0.10 mm (effektiver Außendurchmesser: 42.90 mm)
+ * - Innendurchmesser (inner_diameter): 36.00 mm (Kabelkanal)
+ * - Gesamtlänge (pipe_length): 50.00 mm
+ * - Anschlagring Außendurchmesser (ring_outer_diameter): 48.00 mm
+ * - Anschlagring Länge (ring_length): 3.00 mm (zentriert in der Rohrmitte)
+ * - Äußere Einführfase (outer_chamfer): 1.00 mm an den beiden Rohrenden
  */
 
 /** Hauptfunktion (Orchestrator) */
@@ -38,7 +41,7 @@ export function run(_context: string): void {
     const targetBody = createConnectorPipe(rootComp, params);
     targetBody.name = 'connector-pipe-43mm';
 
-    console.log('Verbindungsrohr (Connector Pipe 43mm, AD=42.8mm, ID=36mm, L=40mm, Fase=1mm) erfolgreich generiert!');
+    console.log('Verbindungsrohr (Connector Pipe 43mm, Nenn-AD=43mm, Spiel=-0.10mm, AD=42.9mm, ID=36mm, L=50mm, Ring=48x3mm, Fase=1mm) erfolgreich generiert!');
 
   } catch (e) {
     console.error(`Failed: ${e}`);
@@ -80,17 +83,35 @@ function setupParameters(design: adsk.fusion.Design) {
   }
 
   return {
-    outerDiameter: getOrCreateParam('outer_diameter', '42.80mm', 'mm', 'Außendurchmesser des Rohres (43mm Nennmaß - 0.20mm Spiel)'),
-    innerDiameter: getOrCreateParam('inner_diameter', '36mm', 'mm', 'Innendurchmesser des Rohres'),
-    pipeLength: getOrCreateParam('pipe_length', '40mm', 'mm', 'Gesamtlänge des Verbindungsrohres'),
-    outerChamfer: getOrCreateParam('outer_chamfer', '1mm', 'mm', 'Fase an den äußeren Kanten des Rohres')
+    outerDiameter: getOrCreateParam('outer_diameter', '43mm', 'mm', 'Nenn-Außendurchmesser des Rohres (43mm)'),
+    outerClearance: getOrCreateParam('outer_clearance', '-0.10mm', 'mm', 'Passungsspiel des Außendurchmessers (-0.10mm)'),
+    innerDiameter: getOrCreateParam('inner_diameter', '36mm', 'mm', 'Innendurchmesser des Rohres (Kabelkanal)'),
+    pipeLength: getOrCreateParam('pipe_length', '50mm', 'mm', 'Gesamtlänge des Verbindungsrohres'),
+    ringOuterDiameter: getOrCreateParam('ring_outer_diameter', '48mm', 'mm', 'Außendurchmesser des mittigen Anschlagrings'),
+    ringLength: getOrCreateParam('ring_length', '3mm', 'mm', 'Länge des mittigen Anschlagrings'),
+    outerChamfer: getOrCreateParam('outer_chamfer', '1mm', 'mm', 'Fase an den äußeren Endkanten des Rohres')
   };
 }
 
 type Params = ReturnType<typeof setupParameters>;
 
 /**
- * Erzeugt den zylindrischen Rohrkörper und fasst die äußeren Kanten leicht an.
+ * Ermittelt den aktuellen Live-BRepBody aus den rootComp bRepBodies.
+ *
+ * @param rootComp Die Wurzelkomponente des Designs.
+ * @param fallbackBody Fallback-Körper, falls in rootComp keine Körper vorhanden sind.
+ * @returns Der gefundene Live-Körper oder der Fallback-Körper.
+ */
+function getLiveBody(rootComp: adsk.fusion.Component, fallbackBody: adsk.fusion.BRepBody): adsk.fusion.BRepBody {
+  if (rootComp.bRepBodies.count > 0) {
+    const b = rootComp.bRepBodies.item(0);
+    if (b) return b;
+  }
+  return fallbackBody;
+}
+
+/**
+ * Erzeugt das Verbindungsrohr mit Basis-Zylinder, mittigem Anschlagring und Endfasen.
  *
  * @param rootComp Die Wurzelkomponente des Designs.
  * @param params Das Objekt mit den benutzerdefinierten Parametern.
@@ -104,16 +125,23 @@ function createConnectorPipe(
   const sketches = rootComp.sketches;
   const center3D = adsk.core.Point3D.create(0, 0, 0);
 
-  // Radien in cm für Fusion 360 API
-  const outerRadiusCm = params.outerDiameter.value / 2.0;
+  // Radien und Längen in cm für Fusion 360 API (unter Berücksichtigung des Passungsspiels)
+  const outerDiameterCm = params.outerDiameter.value + params.outerClearance.value;
+  const outerRadiusCm = outerDiameterCm / 2.0;
   const innerRadiusCm = params.innerDiameter.value / 2.0;
   const pipeLenCm = params.pipeLength.value;
+  const ringOuterRadiusCm = params.ringOuterDiameter.value / 2.0;
+  const ringLenCm = params.ringLength.value;
 
   if (outerRadiusCm <= innerRadiusCm) {
     throw new Error('Der Außendurchmesser muss größer sein als der Innendurchmesser.');
   }
 
-  // 1. Skizze auf der XY-Konstruktionsebene
+  if (pipeLenCm <= ringLenCm) {
+    throw new Error('Die Gesamtlänge des Rohres muss größer sein als die Länge des Anschlagrings.');
+  }
+
+  // 1. Skizze auf der XY-Konstruktionsebene für das Basis-Rohr
   const sketchXY = sketches.add(rootComp.xYConstructionPlane);
   const centerXY = sketchXY.modelToSketchSpace(center3D);
 
@@ -143,10 +171,10 @@ function createConnectorPipe(
   }
 
   if (!pipeProfile) {
-    throw new Error('Konnte das Ringprofil für das Rohr nicht ermitteln.');
+    throw new Error('Konnte das Ringprofil für das Basis-Rohr nicht ermitteln.');
   }
 
-  // 2. Extrusion des Rohrkörpers
+  // 2. Extrusion des Basis-Rohrkörpers
   const extInput = extrudeFeatures.createInput(
     pipeProfile,
     adsk.fusion.FeatureOperations.NewBodyFeatureOperation
@@ -163,26 +191,109 @@ function createConnectorPipe(
     throw new Error('Erzeugung des Rohrkörpers fehlgeschlagen.');
   }
 
-  const targetBody = extFeature.bodies.item(0);
+  let targetBody = extFeature.bodies.item(0);
 
-  // 3. Äußere Kanten leicht anfasen
-  applyOuterChamfers(rootComp, targetBody, outerRadiusCm, params);
+  // 3. Anschlagring in der Mitte der Pipe erzeugen (48mm AD, 3mm Länge)
+  if (ringOuterRadiusCm > outerRadiusCm && ringLenCm > 0) {
+    createCenterRing(rootComp, pipeLenCm, ringLenCm, innerRadiusCm, ringOuterRadiusCm);
+    targetBody = getLiveBody(rootComp, targetBody);
+  }
+
+  // 4. Äußere Kanten an den beiden Rohrenden leicht anfasen
+  applyOuterChamfers(rootComp, targetBody, outerRadiusCm, pipeLenCm, params);
 
   return targetBody;
 }
 
 /**
- * Bringt eine leichte Fase an den äußeren Ringkanten des Rohres an.
+ * Erzeugt den zentrierten Anschlagring in der Mitte des Verbindungsrohres.
+ *
+ * @param rootComp Die Wurzelkomponente des Designs.
+ * @param pipeLenCm Gesamtlänge des Rohres in cm.
+ * @param ringLenCm Länge des Anschlagrings in cm.
+ * @param innerRadiusCm Innenradius des Rohres in cm.
+ * @param ringOuterRadiusCm Außenradius des Anschlagrings in cm.
+ */
+function createCenterRing(
+  rootComp: adsk.fusion.Component,
+  pipeLenCm: number,
+  ringLenCm: number,
+  innerRadiusCm: number,
+  ringOuterRadiusCm: number
+): void {
+  const extrudeFeatures = rootComp.features.extrudeFeatures;
+  const sketches = rootComp.sketches;
+
+  // Versatzebene bei Z = (pipeLenCm - ringLenCm) / 2.0
+  const startZCm = (pipeLenCm - ringLenCm) / 2.0;
+  const planeInput = rootComp.constructionPlanes.createInput();
+  planeInput.setByOffset(
+    rootComp.xYConstructionPlane,
+    adsk.core.ValueInput.createByReal(startZCm)
+  );
+  const ringPlane = rootComp.constructionPlanes.add(planeInput);
+  const sketchRing = sketches.add(ringPlane);
+
+  const center3D = adsk.core.Point3D.create(0, 0, startZCm);
+  const centerPt = sketchRing.modelToSketchSpace(center3D);
+
+  sketchRing.sketchCurves.sketchCircles.addByCenterRadius(centerPt, innerRadiusCm);
+  sketchRing.sketchCurves.sketchCircles.addByCenterRadius(centerPt, ringOuterRadiusCm);
+
+  let ringProfile: adsk.fusion.Profile | null = null;
+  for (let i = 0; i < sketchRing.profiles.count; i++) {
+    const prof = sketchRing.profiles.item(i);
+    if (prof && prof.profileLoops.count === 2) {
+      ringProfile = prof;
+      break;
+    }
+  }
+
+  if (!ringProfile && sketchRing.profiles.count >= 2) {
+    const p0 = sketchRing.profiles.item(0);
+    const p1 = sketchRing.profiles.item(1);
+    if (p0 && p1) {
+      ringProfile = p0.areaProperties().area < p1.areaProperties().area ? p1 : p0;
+    }
+  }
+
+  if (!ringProfile && sketchRing.profiles.count === 1) {
+    ringProfile = sketchRing.profiles.item(0);
+  }
+
+  if (!ringProfile) {
+    throw new Error('Ringprofil für den Anschlagring konnte nicht ermittelt werden.');
+  }
+
+  const extInputRing = extrudeFeatures.createInput(
+    ringProfile,
+    adsk.fusion.FeatureOperations.JoinFeatureOperation
+  );
+
+  let ringDistInput = adsk.core.ValueInput.createByString('ring_length');
+  if (!ringDistInput) {
+    ringDistInput = adsk.core.ValueInput.createByReal(ringLenCm);
+  }
+  extInputRing.setDistanceExtent(false, ringDistInput);
+
+  extrudeFeatures.add(extInputRing);
+  console.log('Mittiger Anschlagring erfolgreich mit Join erzeugt.');
+}
+
+/**
+ * Bringt eine leichte Fase an den beiden äußeren Stirnringkanten des Rohres an.
  *
  * @param rootComp Die Wurzelkomponente des Designs.
  * @param targetBody Der erzeugte Rohrkörper.
  * @param outerRadiusCm Der Außenradius in cm.
+ * @param pipeLenCm Die Gesamtlänge des Rohres in cm.
  * @param params Das Parameter-Objekt.
  */
 function applyOuterChamfers(
   rootComp: adsk.fusion.Component,
   targetBody: adsk.fusion.BRepBody,
   outerRadiusCm: number,
+  pipeLenCm: number,
   params: Params
 ): void {
   const chamferValCm = params.outerChamfer.value;
@@ -190,15 +301,16 @@ function applyOuterChamfers(
 
   const edgeColl = adsk.core.ObjectCollection.create();
 
-  // Suche alle kreisförmigen Außenkanten des Rohres (Radius nahe outerRadiusCm)
+  // Suche kreisförmige Außenkanten an den beiden Rohrenden (Z ≈ 0 und Z ≈ pipeLenCm)
   for (let i = 0; i < targetBody.edges.count; i++) {
     const edge = targetBody.edges.item(i);
     if (edge && edge.geometry.curveType === adsk.core.Curve3DTypes.Circle3DCurveType) {
       const circ = edge.geometry as adsk.core.Circle3D;
       const radiusDiff = Math.abs(circ.radius - outerRadiusCm);
       const isCentered = Math.abs(circ.center.x) < 0.05 && Math.abs(circ.center.y) < 0.05;
+      const isEndFace = Math.abs(circ.center.z - 0) < 0.05 || Math.abs(circ.center.z - pipeLenCm) < 0.05;
 
-      if (radiusDiff < 0.05 && isCentered) {
+      if (radiusDiff < 0.05 && isCentered && isEndFace) {
         edgeColl.add(edge);
       }
     }
@@ -215,7 +327,7 @@ function applyOuterChamfers(
         }
         chamferInput.chamferEdgeSets.addEqualDistanceChamferEdgeSet(edgeColl, valInput, true);
         chamferFeatures.add(chamferInput);
-        console.log(`Fase an ${edgeColl.count} Außenkanten erfolgreich angewendet.`);
+        console.log(`Fase an ${edgeColl.count} Rohrenden-Außenkanten erfolgreich angewendet.`);
       }
     } catch (e) {
       console.warn(`Warnung beim Anfasen der Außenkanten: ${e}`);
@@ -230,13 +342,14 @@ function applyOuterChamfers(
             true
           );
           chamferFeatures.add(fallbackInput);
-          console.log(`Fallback-Fase an Außenkanten erfolgreich angewendet.`);
+          console.log(`Fallback-Fase an Rohrenden-Außenkanten erfolgreich angewendet.`);
         }
       } catch (err2) {
         console.warn(`Fallback beim Anfasen ebenfalls fehlgeschlagen: ${err2}`);
       }
     }
   } else {
-    console.warn('Keine Außenkanten für die Fase gefunden.');
+    console.warn('Keine Rohrenden-Außenkanten für die Fase gefunden.');
   }
 }
+
