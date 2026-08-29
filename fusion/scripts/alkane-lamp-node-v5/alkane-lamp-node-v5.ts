@@ -270,7 +270,7 @@ function setupParameters(design: adsk.fusion.Design) {
     nodeBoreDiameter: getOrCreateParam('node_bore_diameter', '43mm', 'mm', 'Durchmesser der Knoten-Bohrungen (43mm)'),
     nodeBoreDepth: getOrCreateParam('node_bore_depth', '40mm', 'mm', 'Tiefe der Knoten-Bohrungen vom Zentrum (40mm)'),
     nodeFilletRadius: getOrCreateParam('node_fillet_radius', '30mm', 'mm', 'Radius fuer die Tetrapod-Knotenabrundung (30mm)'),
-    innerNodeFilletRadius: getOrCreateParam('inner_node_fillet_radius', '22.5mm', 'mm', 'Radius fuer die inneren 6 Knoten-Kanten (22.5mm)')
+    innerNodeFilletRadius: getOrCreateParam('inner_node_fillet_radius', '2mm', 'mm', 'Radius fuer die inneren 6 Knoten-Kanten (22.5mm)')
   };
 }
 

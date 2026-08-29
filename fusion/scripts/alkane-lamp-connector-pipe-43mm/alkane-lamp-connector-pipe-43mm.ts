@@ -7,17 +7,27 @@ const ui = app ? app.userInterface : null;
 /**
  * @file alkane-lamp-connector-pipe-43mm.ts
  * @description Fusion 360 Skript zur Erzeugung eines Verbindungsrohres (Connector Pipe 43mm)
- * mit zentriertem Anschlagring für die Alkane-Lamp Baugruppe (optimiert für den FDM-3D-Druck auf Bambu Lab P2S).
+ * mit optional separatem oder integriertem Anschlagring für die Alkane-Lamp Baugruppe
+ * (optimiert für den FDM-3D-Druck auf Bambu Lab P2S).
  *
  * ## Technische CAD-Kennwerte:
  * - Nenn-Außendurchmesser (outer_diameter): 43.00 mm
  * - Passungsspiel Außendurchmesser (outer_clearance): -0.10 mm (effektiver Außendurchmesser: 42.90 mm)
  * - Innendurchmesser (inner_diameter): 36.00 mm (Kabelkanal)
  * - Gesamtlänge (pipe_length): 50.00 mm
+ * - Separater Ring (ring_as_separate_body): 1 (1 = separates Bauteil auf XY-Ebene, 0 = integrierter Bund)
  * - Anschlagring Außendurchmesser (ring_outer_diameter): 48.00 mm
- * - Anschlagring Länge (ring_length): 3.00 mm (zentriert in der Rohrmitte)
+ * - Anschlagring Nenn-Innendurchmesser (ring_inner_diameter): 43.00 mm
+ * - Anschlagring Passungsspiel (ring_inner_clearance): +0.05 mm (effektiver Ring-Innendurchmesser: 43.05 mm)
+ * - Anschlagring Länge (ring_length): 3.00 mm
  * - Äußere Einführfase (outer_chamfer): 1.00 mm an den beiden Rohrenden
  */
+
+/** Ergebnisstruktur der Erzeugung */
+interface ConnectorPipeResult {
+  pipeBody: adsk.fusion.BRepBody;
+  ringBody?: adsk.fusion.BRepBody;
+}
 
 /** Hauptfunktion (Orchestrator) */
 export function run(_context: string): void {
@@ -37,11 +47,16 @@ export function run(_context: string): void {
     // 1. Parameter definieren / abrufen
     const params = setupParameters(design);
 
-    // 2. Verbindungsrohr erzeugen
-    const targetBody = createConnectorPipe(rootComp, params);
-    targetBody.name = 'connector-pipe-43mm';
+    // 2. Verbindungsrohr (und ggf. separaten Ring) erzeugen
+    const result = createConnectorPipe(rootComp, params);
+    result.pipeBody.name = 'connector-pipe-43mm';
+    if (result.ringBody) {
+      result.ringBody.name = 'connector-pipe-ring-48mm';
+    }
 
-    console.log('Verbindungsrohr (Connector Pipe 43mm, Nenn-AD=43mm, Spiel=-0.10mm, AD=42.9mm, ID=36mm, L=50mm, Ring=48x3mm, Fase=1mm) erfolgreich generiert!');
+    const isSeparate = Math.round(params.ringAsSeparateBody.value) === 1;
+    const ringModeStr = isSeparate ? 'separater Ring ID=43.05mm auf XY-Ebene' : 'integrierter Mittenbund';
+    console.log(`Verbindungsrohr (Connector Pipe 43mm, Nenn-AD=43mm, eff. AD=42.90mm, ID=36mm, L=50mm, Ring 48x3mm [${ringModeStr}], Fase=1mm) erfolgreich generiert!`);
 
   } catch (e) {
     console.error(`Failed: ${e}`);
@@ -87,8 +102,11 @@ function setupParameters(design: adsk.fusion.Design) {
     outerClearance: getOrCreateParam('outer_clearance', '-0.10mm', 'mm', 'Passungsspiel des Außendurchmessers (-0.10mm)'),
     innerDiameter: getOrCreateParam('inner_diameter', '36mm', 'mm', 'Innendurchmesser des Rohres (Kabelkanal)'),
     pipeLength: getOrCreateParam('pipe_length', '50mm', 'mm', 'Gesamtlänge des Verbindungsrohres'),
-    ringOuterDiameter: getOrCreateParam('ring_outer_diameter', '48mm', 'mm', 'Außendurchmesser des mittigen Anschlagrings'),
-    ringLength: getOrCreateParam('ring_length', '3mm', 'mm', 'Länge des mittigen Anschlagrings'),
+    ringAsSeparateBody: getOrCreateParam('ring_as_separate_body', '1', '', 'Ring als separates Bauteil erzeugen (1 = Ja auf XY-Ebene, 0 = Nein/integriert)'),
+    ringOuterDiameter: getOrCreateParam('ring_outer_diameter', '48mm', 'mm', 'Außendurchmesser des Anschlagrings'),
+    ringInnerDiameter: getOrCreateParam('ring_inner_diameter', '43mm', 'mm', 'Nenn-Innendurchmesser des separaten Anschlagrings'),
+    ringInnerClearance: getOrCreateParam('ring_inner_clearance', '0.05mm', 'mm', 'Passungsspiel/Aufmaß des Ring-Innendurchmessers (+0.05mm)'),
+    ringLength: getOrCreateParam('ring_length', '3mm', 'mm', 'Länge des Anschlagrings'),
     outerChamfer: getOrCreateParam('outer_chamfer', '1mm', 'mm', 'Fase an den äußeren Endkanten des Rohres')
   };
 }
@@ -111,27 +129,30 @@ function getLiveBody(rootComp: adsk.fusion.Component, fallbackBody: adsk.fusion.
 }
 
 /**
- * Erzeugt das Verbindungsrohr mit Basis-Zylinder, mittigem Anschlagring und Endfasen.
+ * Erzeugt das Verbindungsrohr mit Basis-Zylinder, Anschlagring (separat oder integriert) und Endfasen.
  *
  * @param rootComp Die Wurzelkomponente des Designs.
  * @param params Das Objekt mit den benutzerdefinierten Parametern.
- * @returns Der erzeugte 3D-Körper (BRepBody).
+ * @returns Das Ergebnisobjekt mit dem Rohrkörper und optionalem separaten Ringkörper.
  */
 function createConnectorPipe(
   rootComp: adsk.fusion.Component,
   params: Params
-): adsk.fusion.BRepBody {
+): ConnectorPipeResult {
   const extrudeFeatures = rootComp.features.extrudeFeatures;
   const sketches = rootComp.sketches;
   const center3D = adsk.core.Point3D.create(0, 0, 0);
 
-  // Radien und Längen in cm für Fusion 360 API (unter Berücksichtigung des Passungsspiels)
+  // Radien und Längen in cm für Fusion 360 API (unter Berücksichtigung der Passungsspiele)
   const outerDiameterCm = params.outerDiameter.value + params.outerClearance.value;
   const outerRadiusCm = outerDiameterCm / 2.0;
   const innerRadiusCm = params.innerDiameter.value / 2.0;
   const pipeLenCm = params.pipeLength.value;
   const ringOuterRadiusCm = params.ringOuterDiameter.value / 2.0;
+  const ringInnerDiameterCm = params.ringInnerDiameter.value + params.ringInnerClearance.value;
+  const ringInnerRadiusCm = ringInnerDiameterCm / 2.0;
   const ringLenCm = params.ringLength.value;
+  const isSeparateRing = Math.round(params.ringAsSeparateBody.value) === 1;
 
   if (outerRadiusCm <= innerRadiusCm) {
     throw new Error('Der Außendurchmesser muss größer sein als der Innendurchmesser.');
@@ -191,22 +212,105 @@ function createConnectorPipe(
     throw new Error('Erzeugung des Rohrkörpers fehlgeschlagen.');
   }
 
-  let targetBody = extFeature.bodies.item(0);
+  let pipeBody = extFeature.bodies.item(0);
+  let ringBody: adsk.fusion.BRepBody | undefined;
 
-  // 3. Anschlagring in der Mitte der Pipe erzeugen (48mm AD, 3mm Länge)
+  // 3. Anschlagring erzeugen: entweder separat auf XY-Ebene oder integriert in der Rohrmitte
   if (ringOuterRadiusCm > outerRadiusCm && ringLenCm > 0) {
-    createCenterRing(rootComp, pipeLenCm, ringLenCm, innerRadiusCm, ringOuterRadiusCm);
-    targetBody = getLiveBody(rootComp, targetBody);
+    if (isSeparateRing) {
+      // Separater Ring neben dem Rohr auf der XY-Ebene (Abstand ca. 15mm zwischen Außenkanten)
+      const ringOffsetXCm = (params.outerDiameter.value + params.ringOuterDiameter.value) / 2.0 + 1.5;
+      ringBody = createSeparateRing(rootComp, ringOffsetXCm, ringLenCm, ringInnerRadiusCm, ringOuterRadiusCm);
+    } else {
+      // Integrierter Ring in der Rohrmitte (Join-Operation)
+      createIntegratedCenterRing(rootComp, pipeLenCm, ringLenCm, innerRadiusCm, ringOuterRadiusCm);
+      pipeBody = getLiveBody(rootComp, pipeBody);
+    }
   }
 
   // 4. Äußere Kanten an den beiden Rohrenden leicht anfasen
-  applyOuterChamfers(rootComp, targetBody, outerRadiusCm, pipeLenCm, params);
+  applyOuterChamfers(rootComp, pipeBody, outerRadiusCm, pipeLenCm, params);
 
-  return targetBody;
+  return { pipeBody, ringBody };
 }
 
 /**
- * Erzeugt den zentrierten Anschlagring in der Mitte des Verbindungsrohres.
+ * Erzeugt den Anschlagring als separates Bauteil auf der XY-Ebene neben dem Rohr.
+ *
+ * @param rootComp Die Wurzelkomponente des Designs.
+ * @param ringOffsetXCm X-Versatz für die Platzierung neben dem Rohr.
+ * @param ringLenCm Länge/Höhe des Rings in cm.
+ * @param ringInnerRadiusCm Innenradius des Rings in cm.
+ * @param ringOuterRadiusCm Außenradius des Rings in cm.
+ * @returns Der erzeugte separate Ring-Körper.
+ */
+function createSeparateRing(
+  rootComp: adsk.fusion.Component,
+  ringOffsetXCm: number,
+  ringLenCm: number,
+  ringInnerRadiusCm: number,
+  ringOuterRadiusCm: number
+): adsk.fusion.BRepBody {
+  const extrudeFeatures = rootComp.features.extrudeFeatures;
+  const sketches = rootComp.sketches;
+
+  // Skizze auf der XY-Konstruktionsebene
+  const sketchRing = sketches.add(rootComp.xYConstructionPlane);
+  const center3D = adsk.core.Point3D.create(ringOffsetXCm, 0, 0);
+  const centerPt = sketchRing.modelToSketchSpace(center3D);
+
+  sketchRing.sketchCurves.sketchCircles.addByCenterRadius(centerPt, ringInnerRadiusCm);
+  sketchRing.sketchCurves.sketchCircles.addByCenterRadius(centerPt, ringOuterRadiusCm);
+
+  let ringProfile: adsk.fusion.Profile | null = null;
+  for (let i = 0; i < sketchRing.profiles.count; i++) {
+    const prof = sketchRing.profiles.item(i);
+    if (prof && prof.profileLoops.count === 2) {
+      ringProfile = prof;
+      break;
+    }
+  }
+
+  if (!ringProfile && sketchRing.profiles.count >= 2) {
+    const p0 = sketchRing.profiles.item(0);
+    const p1 = sketchRing.profiles.item(1);
+    if (p0 && p1) {
+      ringProfile = p0.areaProperties().area < p1.areaProperties().area ? p1 : p0;
+    }
+  }
+
+  if (!ringProfile && sketchRing.profiles.count === 1) {
+    ringProfile = sketchRing.profiles.item(0);
+  }
+
+  if (!ringProfile) {
+    throw new Error('Ringprofil für den separaten Anschlagring konnte nicht ermittelt werden.');
+  }
+
+  const extInputRing = extrudeFeatures.createInput(
+    ringProfile,
+    adsk.fusion.FeatureOperations.NewBodyFeatureOperation
+  );
+
+  let ringDistInput = adsk.core.ValueInput.createByString('ring_length');
+  if (!ringDistInput) {
+    ringDistInput = adsk.core.ValueInput.createByReal(ringLenCm);
+  }
+  extInputRing.setDistanceExtent(false, ringDistInput);
+
+  const extFeature = extrudeFeatures.add(extInputRing);
+  if (!extFeature || extFeature.bodies.count === 0) {
+    throw new Error('Erzeugung des separaten Anschlagrings fehlgeschlagen.');
+  }
+
+  const ringBody = extFeature.bodies.item(0);
+  ringBody.name = 'connector-pipe-ring-48mm';
+  console.log(`Separater Anschlagring (OD=48mm, ID=43mm, L=3mm, Offset X=${(ringOffsetXCm * 10).toFixed(1)}mm) erfolgreich auf XY-Ebene erzeugt.`);
+  return ringBody;
+}
+
+/**
+ * Erzeugt den zentrierten Anschlagring in der Mitte des Verbindungsrohres als integriertes Feature (Join).
  *
  * @param rootComp Die Wurzelkomponente des Designs.
  * @param pipeLenCm Gesamtlänge des Rohres in cm.
@@ -214,7 +318,7 @@ function createConnectorPipe(
  * @param innerRadiusCm Innenradius des Rohres in cm.
  * @param ringOuterRadiusCm Außenradius des Anschlagrings in cm.
  */
-function createCenterRing(
+function createIntegratedCenterRing(
   rootComp: adsk.fusion.Component,
   pipeLenCm: number,
   ringLenCm: number,
@@ -277,7 +381,7 @@ function createCenterRing(
   extInputRing.setDistanceExtent(false, ringDistInput);
 
   extrudeFeatures.add(extInputRing);
-  console.log('Mittiger Anschlagring erfolgreich mit Join erzeugt.');
+  console.log('Mittiger Anschlagring erfolgreich mit Join am Rohr integriert.');
 }
 
 /**

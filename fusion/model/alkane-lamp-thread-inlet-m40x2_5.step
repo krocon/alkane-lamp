@@ -10,7 +10,7 @@ FILE_DESCRIPTION(
 
 FILE_NAME(
 /* name */ 'alkane-lamp-thread-inlet-m40x2_5.step',
-/* time_stamp */ '2026-08-28T12:35:58+02:00',
+/* time_stamp */ '2026-08-29T09:55:51+02:00',
 /* author */ (''),
 /* organization */ (''),
 /* preprocessor_version */ 'ST-DEVELOPER v20.1',
@@ -7173,18 +7173,18 @@ SOLID_ANGLE_UNIT()
 #6087=SHAPE_REPRESENTATION('',(#778),#6079);
 #6088=PRODUCT_DEFINITION_CONTEXT('part definition',#6093,'design');
 #6089=PRODUCT_DEFINITION('alkane-lamp-thread-inlet-m40x2_5',
-'alkane-lamp-thread-inlet-m40x2_5 v1',#6090,#6088);
+'alkane-lamp-thread-inlet-m40x2_5 v2',#6090,#6088);
 #6090=PRODUCT_DEFINITION_FORMATION('',$,#6095);
 #6091=PRODUCT_RELATED_PRODUCT_CATEGORY(
-'alkane-lamp-thread-inlet-m40x2_5 v1',
-'alkane-lamp-thread-inlet-m40x2_5 v1',(#6095));
+'alkane-lamp-thread-inlet-m40x2_5 v2',
+'alkane-lamp-thread-inlet-m40x2_5 v2',(#6095));
 #6092=APPLICATION_PROTOCOL_DEFINITION('international standard',
 'automotive_design',2009,#6093);
 #6093=APPLICATION_CONTEXT(
 'Core Data for Automotive Mechanical Design Process');
 #6094=PRODUCT_CONTEXT('part definition',#6093,'mechanical');
 #6095=PRODUCT('alkane-lamp-thread-inlet-m40x2_5',
-'alkane-lamp-thread-inlet-m40x2_5 v1',$,(#6094));
+'alkane-lamp-thread-inlet-m40x2_5 v2',$,(#6094));
 #6096=PRESENTATION_STYLE_ASSIGNMENT((#6097));
 #6097=SURFACE_STYLE_USAGE(.BOTH.,#6098);
 #6098=SURFACE_SIDE_STYLE('',(#6099));
